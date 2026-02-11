@@ -1,0 +1,8 @@
+[package]
+name = "getman"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.13.1", features = ["tokio"] }
+reqwest = { version = "0.12.12", default-features = false, features = ["rustls-tls"] }
