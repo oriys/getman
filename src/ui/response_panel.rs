@@ -6,7 +6,7 @@ use crate::Message;
 
 pub fn view<'a>(
     error: Option<&str>,
-    response: Option<&HttpResponse>,
+    response: Option<&'a HttpResponse>,
 ) -> Element<'a, Message> {
     let mut section = column![text("响应").size(20)].spacing(8);
 
@@ -21,9 +21,9 @@ pub fn view<'a>(
         ));
 
         let headers =
-            scrollable(container(text(response.headers.clone()).size(14)).padding(10)).height(150);
+            scrollable(container(text(&response.headers).size(14)).padding(10)).height(150);
 
-        let body = scrollable(container(text(response.body.clone()).size(14)).padding(10))
+        let body = scrollable(container(text(&response.body).size(14)).padding(10))
             .height(Length::Fill);
 
         section = section
