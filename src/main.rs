@@ -165,6 +165,7 @@ pub enum Message {
     SendPressed,
     SaveRequestPressed,
     SavedRequestSelected(usize),
+    DeleteSavedRequest(usize),
     HistoryEntrySelected(usize),
     HistoryCleared,
     RequestFinished {
@@ -310,6 +311,17 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             if let Some(saved_request) = app.saved_requests.get(index).cloned() {
                 apply_saved_request(app, &saved_request);
                 app.error = None;
+            }
+            Task::none()
+        }
+        Message::DeleteSavedRequest(index) => {
+            if index < app.saved_requests.len() {
+                app.saved_requests.remove(index);
+                if let Err(err) = storage::save_saved_requests(&app.saved_requests) {
+                    app.error = Some(err);
+                } else {
+                    app.error = None;
+                }
             }
             Task::none()
         }

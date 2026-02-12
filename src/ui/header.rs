@@ -32,12 +32,12 @@ pub fn view<'a>(
     container(
         row![
             sidebar_toggle,
-            text("Getman").size(20),
-            text("v1.0").size(12).color(style::TEXT_MUTED),
+            text("Getman").size(18),
+            text("v1.0").size(11).color(style::TEXT_MUTED),
             horizontal_space(),
             env_select
         ]
-        .spacing(10)
+        .spacing(8)
         .padding([7, 12])
         .align_y(Alignment::Center),
     )

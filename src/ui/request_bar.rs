@@ -26,18 +26,18 @@ pub fn view<'a>(method: HttpMethod, url: &str, loading: bool) -> Element<'a, Mes
 
     let send_button = if loading {
         iced::widget::button("Sending...")
-            .padding([9, 14])
+            .padding([9, 18])
             .style(style::primary_button)
     } else {
         iced::widget::button("Send")
             .on_press(Message::SendPressed)
-            .padding([9, 14])
+            .padding([9, 18])
             .style(style::primary_button)
     };
 
     let save_button = iced::widget::button("Save")
         .on_press(Message::SaveRequestPressed)
-        .padding([9, 14])
+        .padding([9, 18])
         .style(style::subtle_button);
 
     row![method_picklist, url_input, send_button, save_button]
