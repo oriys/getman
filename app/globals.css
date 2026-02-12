@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: "Avenir Next", "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  min-height: 100vh;
+  background: hsl(var(--background));
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    --background: 210 35% 98%;
+    --foreground: 222 47% 13%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 13%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 13%;
+    --primary: 200 80% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 32% 95%;
+    --secondary-foreground: 222 47% 13%;
+    --muted: 210 28% 95%;
+    --muted-foreground: 215 14% 46%;
+    --accent: 165 70% 36%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214 30% 88%;
+    --input: 214 30% 88%;
+    --ring: 200 80% 42%;
+    --chart-1: 165 70% 36%;
+    --chart-2: 206 84% 45%;
+    --chart-3: 32 95% 42%;
+    --chart-4: 270 65% 46%;
+    --chart-5: 0 70% 45%;
+    --radius: 0.5rem;
+    --sidebar-background: 210 38% 97%;
+    --sidebar-foreground: 222 47% 13%;
+    --sidebar-primary: 200 80% 42%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 34% 94%;
+    --sidebar-accent-foreground: 222 47% 13%;
+    --sidebar-border: 214 30% 88%;
+    --sidebar-ring: 200 80% 42%;
+
+    --method-get: 154 76% 32%;
+    --method-post: 32 95% 42%;
+    --method-put: 206 84% 45%;
+    --method-patch: 270 65% 46%;
+    --method-delete: 0 70% 45%;
+    --method-head: 215 16% 40%;
+    --method-options: 215 16% 40%;
+
+    --surface-0: 210 38% 97%;
+    --surface-1: 0 0% 100%;
+    --surface-2: 210 30% 95%;
+    --surface-3: 210 26% 90%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    background: hsl(var(--surface-1));
+    border: 1px solid hsl(var(--border));
+  }
+
+  .panel-inset {
+    background: hsl(var(--surface-1));
+    border: 1px solid hsl(var(--border));
+  }
+}
+
+/* Hide scrollbar but keep scroll behavior */
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* JSON syntax highlighting */
+.json-key { color: hsl(210 74% 40%); }
+.json-string { color: hsl(146 55% 32%); }
+.json-number { color: hsl(30 80% 38%); }
+.json-boolean { color: hsl(272 50% 44%); }
+.json-null { color: hsl(0 65% 42%); }

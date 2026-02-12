@@ -1,0 +1,11 @@
+{
+  "entries": [
+    {
+      "timestamp": 1770858780,
+      "method": "Get",
+      "url": "https://www.example.com",
+      "status": "200 OK",
+      "duration_ms": 1368
+    }
+  ]
+}
