@@ -40,6 +40,11 @@ impl History {
         }
     }
 
+    /// Create a History from an existing collection of entries.
+    pub fn from_entries(entries: VecDeque<HistoryEntry>) -> Self {
+        Self { entries }
+    }
+
     /// Add an entry to the front of the history list, evicting the oldest
     /// entry if the list exceeds the maximum size.
     pub fn push(&mut self, entry: HistoryEntry) {
