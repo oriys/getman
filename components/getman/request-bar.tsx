@@ -1,8 +1,8 @@
 "use client";
 
-import React from "react"
+import React, { useState } from "react"
 
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, Code, Check } from "lucide-react";
 import {
   useActiveTab,
   useGetmanStore,
@@ -43,9 +43,80 @@ const methodTextColors: Record<HttpMethod, string> = {
   OPTIONS: "text-[hsl(var(--method-options))]",
 };
 
+function buildCurlCommand(tab: NonNullable<ReturnType<typeof useActiveTab>>): string {
+  const parts: string[] = ["curl"];
+
+  if (tab.method !== "GET") {
+    parts.push(`-X ${tab.method}`);
+  }
+
+  const resolvedUrl = resolveEnvVariables(tab.url);
+  try {
+    const url = new URL(resolvedUrl);
+    for (const p of tab.params) {
+      if (p.enabled && p.key) {
+        url.searchParams.set(p.key, resolveEnvVariables(p.value));
+      }
+    }
+    if (tab.authType === "api-key" && tab.authApiAddTo === "query") {
+      url.searchParams.set(resolveEnvVariables(tab.authApiKey), resolveEnvVariables(tab.authApiValue));
+    }
+    parts.push(`'${url.toString()}'`);
+  } catch {
+    parts.push(`'${resolvedUrl}'`);
+  }
+
+  const headers: Record<string, string> = {};
+  for (const h of tab.headers) {
+    if (h.enabled && h.key) {
+      headers[h.key] = resolveEnvVariables(h.value);
+    }
+  }
+  if (tab.authType === "bearer" && tab.authToken) {
+    headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.authToken)}`;
+  } else if (tab.authType === "basic" && tab.authUsername) {
+    headers["Authorization"] = `Basic ${btoa(`${resolveEnvVariables(tab.authUsername)}:${resolveEnvVariables(tab.authPassword)}`)}`;
+  } else if (tab.authType === "api-key" && tab.authApiAddTo === "header") {
+    headers[resolveEnvVariables(tab.authApiKey)] = resolveEnvVariables(tab.authApiValue);
+  }
+
+  if (!["GET", "HEAD", "OPTIONS"].includes(tab.method)) {
+    if (tab.bodyType === "json") {
+      headers["Content-Type"] = headers["Content-Type"] || "application/json";
+    } else if (tab.bodyType === "x-www-form-urlencoded") {
+      headers["Content-Type"] = headers["Content-Type"] || "application/x-www-form-urlencoded";
+    }
+  }
+
+  for (const [key, value] of Object.entries(headers)) {
+    parts.push(`-H '${key}: ${value}'`);
+  }
+
+  if (!["GET", "HEAD", "OPTIONS"].includes(tab.method)) {
+    if (tab.bodyType === "json" || tab.bodyType === "raw") {
+      const body = resolveEnvVariables(tab.bodyContent);
+      if (body) parts.push(`-d '${body.replace(/'/g, "'\\''")}'`);
+    } else if (tab.bodyType === "x-www-form-urlencoded") {
+      const params = new URLSearchParams();
+      for (const f of tab.bodyFormData) {
+        if (f.enabled && f.key) params.set(f.key, resolveEnvVariables(f.value));
+      }
+      const body = params.toString();
+      if (body) parts.push(`-d '${body}'`);
+    } else if (tab.bodyType === "form-data") {
+      for (const f of tab.bodyFormData) {
+        if (f.enabled && f.key) parts.push(`-F '${f.key}=${resolveEnvVariables(f.value)}'`);
+      }
+    }
+  }
+
+  return parts.join(" \\\n  ");
+}
+
 export function RequestBar() {
   const store = useGetmanStore();
   const tab = useActiveTab();
+  const [curlCopied, setCurlCopied] = useState(false);
   if (!tab) return null;
 
   const sendRequest = async () => {
@@ -193,6 +264,21 @@ export function RequestBar() {
         onChange={(e) => updateActiveTab({ url: e.target.value })}
         onKeyDown={handleKeyDown}
       />
+
+      <button
+        type="button"
+        onClick={() => {
+          const curl = buildCurlCommand(tab);
+          navigator.clipboard.writeText(curl);
+          setCurlCopied(true);
+          setTimeout(() => setCurlCopied(false), 2000);
+        }}
+        disabled={!tab.url.trim()}
+        className="flex h-11 items-center gap-1.5 border-l border-border/80 px-3 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        title="Copy as cURL"
+      >
+        {curlCopied ? <Check className="h-3.5 w-3.5 text-primary" /> : <Code className="h-3.5 w-3.5" />}
+      </button>
 
       <button
         type="button"

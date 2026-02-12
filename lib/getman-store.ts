@@ -308,6 +308,16 @@ export function addTab() {
   });
 }
 
+export function duplicateTab(id: string) {
+  const source = state.tabs.find((t) => t.id === id);
+  if (!source) return;
+  const newTab: RequestTab = { ...source, id: uid(), name: `${source.name} (Copy)` };
+  const idx = state.tabs.findIndex((t) => t.id === id);
+  const tabs = [...state.tabs];
+  tabs.splice(idx + 1, 0, newTab);
+  setState({ tabs, activeTabId: newTab.id, response: null });
+}
+
 export function closeTab(id: string) {
   if (state.tabs.length <= 1) return;
   const idx = state.tabs.findIndex((t) => t.id === id);
@@ -356,6 +366,13 @@ export function deleteCollection(id: string) {
   setState({ collections: state.collections.filter((c) => c.id !== id) });
 }
 
+export function renameCollection(id: string, name: string) {
+  const collections = state.collections.map((c) =>
+    c.id === id ? { ...c, name } : c
+  );
+  setState({ collections });
+}
+
 export function saveRequestToCollection(collectionId: string, request: SavedRequest) {
   const collections = state.collections.map((c) =>
     c.id === collectionId ? { ...c, requests: [...c.requests, request] } : c
@@ -367,6 +384,15 @@ export function deleteRequestFromCollection(collectionId: string, requestId: str
   const collections = state.collections.map((c) =>
     c.id === collectionId
       ? { ...c, requests: c.requests.filter((r) => r.id !== requestId) }
+      : c
+  );
+  setState({ collections });
+}
+
+export function renameRequestInCollection(collectionId: string, requestId: string, name: string) {
+  const collections = state.collections.map((c) =>
+    c.id === collectionId
+      ? { ...c, requests: c.requests.map((r) => (r.id === requestId ? { ...r, name } : r)) }
       : c
   );
   setState({ collections });
