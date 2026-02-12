@@ -1,5 +1,5 @@
 use iced::widget::{button, checkbox, column, container, row, scrollable, text};
-use iced::{Element, Length};
+use iced::{Color, Element, Length};
 
 use crate::http::response::HttpResponse;
 use crate::{Message, ResponseTab};
@@ -22,12 +22,15 @@ pub fn view<'a>(
     let mut section = column![tabs].spacing(0).height(Length::Fill);
 
     if let Some(response) = response {
+        let status_color = status_code_color(&response.status);
         let summary = row![
+            text(&response.status).size(13).color(status_color),
             text(format!(
-            "{} | {} ms | {} bytes",
-            response.status, response.duration_ms, response.size_bytes
+                " | {} ms | {} bytes",
+                response.duration_ms, response.size_bytes
             ))
-            .size(12),
+            .size(12)
+            .color(style::TEXT_MUTED),
             iced::widget::horizontal_space(),
             checkbox("Pretty JSON", pretty_json).on_toggle(Message::PrettyJsonToggled)
         ]
@@ -61,7 +64,7 @@ pub fn view<'a>(
 
         section = section.push(summary).push(container(content).padding(10).height(Length::Fill));
     } else {
-        let mut empty = column![text("No response yet").size(14)]
+        let mut empty = column![text("No response yet").size(14).color(style::TEXT_MUTED)]
             .height(Length::Fill)
             .width(Length::Fill)
             .align_x(iced::alignment::Horizontal::Center)
@@ -93,5 +96,18 @@ fn pretty_json_body(raw: &str) -> String {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw.to_string()),
         Err(_) => raw.to_string(),
+    }
+}
+
+/// Returns a color based on the HTTP status code prefix.
+fn status_code_color(status: &str) -> Color {
+    if status.starts_with('2') {
+        style::PRIMARY // green for success
+    } else if status.starts_with('3') {
+        Color::from_rgb(0.95, 0.77, 0.06) // yellow for redirects
+    } else if status.starts_with('4') || status.starts_with('5') {
+        style::DANGER // red for errors
+    } else {
+        style::TEXT
     }
 }

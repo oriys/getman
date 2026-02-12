@@ -50,12 +50,19 @@ fn collections_view<'a>(saved_requests: &'a [SavedRequest]) -> Element<'a, Messa
     } else {
         for (index, request) in saved_requests.iter().enumerate() {
             let label = format!("{} {}", request.method, request.url);
+            let item_btn = button(text(label).size(12))
+                .on_press(Message::SavedRequestSelected(index))
+                .width(Length::Fill)
+                .padding([8, 10])
+                .style(move |theme, status| style::list_item_button(false, theme, status));
+            let del_btn = button(text("✕").size(11))
+                .on_press(Message::DeleteSavedRequest(index))
+                .padding([4, 8])
+                .style(style::ghost_button);
             list = list.push(
-                button(text(label).size(12))
-                    .on_press(Message::SavedRequestSelected(index))
-                    .width(Length::Fill)
-                    .padding([8, 10])
-                    .style(move |theme, status| style::list_item_button(false, theme, status)),
+                row![item_btn, del_btn]
+                    .spacing(4)
+                    .align_y(iced::alignment::Alignment::Center),
             );
         }
     }
