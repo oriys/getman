@@ -74,7 +74,7 @@ pub fn save_saved_requests(requests: &[SavedRequest]) -> Result<(), String> {
             r.params,
             r.headers,
             r.body,
-            format!("{:?}", r.auth_type),
+            auth_type_to_str(r.auth_type),
             r.auth_bearer_token,
             r.auth_basic_username,
             r.auth_basic_password,
@@ -199,6 +199,16 @@ fn parse_auth_type(s: &str) -> AuthType {
         "ApiKeyHeader" => AuthType::ApiKeyHeader,
         "ApiKeyQuery" => AuthType::ApiKeyQuery,
         _ => AuthType::None,
+    }
+}
+
+fn auth_type_to_str(auth_type: AuthType) -> &'static str {
+    match auth_type {
+        AuthType::None => "None",
+        AuthType::BearerToken => "BearerToken",
+        AuthType::BasicAuth => "BasicAuth",
+        AuthType::ApiKeyHeader => "ApiKeyHeader",
+        AuthType::ApiKeyQuery => "ApiKeyQuery",
     }
 }
 
