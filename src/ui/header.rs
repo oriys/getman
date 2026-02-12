@@ -11,34 +11,30 @@ pub fn view<'a>(
     sidebar_open: bool,
     active_environment: EnvironmentOption,
 ) -> Element<'a, Message> {
-    let sidebar_toggle = button(if sidebar_open {
-        "Hide Sidebar"
-    } else {
-        "Show Sidebar"
-    })
-    .on_press(Message::SidebarTogglePressed)
-    .padding([6, 10])
-    .style(style::ghost_button);
+    let sidebar_toggle = button(text(if sidebar_open { "◀" } else { "▶" }).size(14))
+        .on_press(Message::SidebarTogglePressed)
+        .padding([6, 10])
+        .style(style::ghost_button);
 
     let env_select = pick_list(
         &EnvironmentOption::ALL[..],
         Some(active_environment),
         Message::EnvironmentSelected,
     )
-    .width(180)
+    .width(160)
     .style(style::pick_list_style)
     .padding([5, 8]);
 
     container(
         row![
             sidebar_toggle,
-            text("Getman").size(18),
-            text("v1.0").size(11).color(style::TEXT_MUTED),
+            text("Getman").size(16),
+            text("v0.1").size(10).color(style::TEXT_MUTED),
             horizontal_space(),
             env_select
         ]
         .spacing(8)
-        .padding([7, 12])
+        .padding([5, 12])
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)

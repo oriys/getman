@@ -1,6 +1,8 @@
 use iced::widget::{button, container, pick_list, text_editor, text_input};
 use iced::{Background, Border, Color, Theme};
 
+use crate::http::method::HttpMethod;
+
 pub const BG: Color = Color {
     r: 18.0 / 255.0,
     g: 21.0 / 255.0,
@@ -68,6 +70,61 @@ pub const DANGER: Color = Color {
     a: 1.0,
 };
 
+pub const METHOD_GET: Color = Color {
+    r: 73.0 / 255.0,
+    g: 204.0 / 255.0,
+    b: 144.0 / 255.0,
+    a: 1.0,
+};
+pub const METHOD_POST: Color = Color {
+    r: 1.0,
+    g: 176.0 / 255.0,
+    b: 59.0 / 255.0,
+    a: 1.0,
+};
+pub const METHOD_PUT: Color = Color {
+    r: 82.0 / 255.0,
+    g: 167.0 / 255.0,
+    b: 244.0 / 255.0,
+    a: 1.0,
+};
+pub const METHOD_PATCH: Color = Color {
+    r: 180.0 / 255.0,
+    g: 130.0 / 255.0,
+    b: 240.0 / 255.0,
+    a: 1.0,
+};
+pub const METHOD_DELETE: Color = Color {
+    r: 240.0 / 255.0,
+    g: 92.0 / 255.0,
+    b: 92.0 / 255.0,
+    a: 1.0,
+};
+pub const METHOD_HEAD: Color = Color {
+    r: 73.0 / 255.0,
+    g: 204.0 / 255.0,
+    b: 144.0 / 255.0,
+    a: 1.0,
+};
+pub const METHOD_OPTIONS: Color = Color {
+    r: 233.0 / 255.0,
+    g: 120.0 / 255.0,
+    b: 180.0 / 255.0,
+    a: 1.0,
+};
+
+pub fn method_color(method: HttpMethod) -> Color {
+    match method {
+        HttpMethod::Get => METHOD_GET,
+        HttpMethod::Post => METHOD_POST,
+        HttpMethod::Put => METHOD_PUT,
+        HttpMethod::Patch => METHOD_PATCH,
+        HttpMethod::Delete => METHOD_DELETE,
+        HttpMethod::Head => METHOD_HEAD,
+        HttpMethod::Options => METHOD_OPTIONS,
+    }
+}
+
 pub fn app_theme() -> Theme {
     Theme::custom(
         "Getman".to_string(),
@@ -99,12 +156,17 @@ pub fn flat_surface_style(color: Color) -> container::Style {
 }
 
 pub fn section_tab_button(active: bool, _theme: &Theme, status: button::Status) -> button::Style {
-    let base_bg = if active { SURFACE_2 } else { SURFACE_0 };
     let bg = match status {
-        button::Status::Active => base_bg,
-        button::Status::Hovered => SURFACE_2,
-        button::Status::Pressed => SURFACE_3,
-        button::Status::Disabled => SURFACE_1,
+        button::Status::Active => {
+            if active {
+                SURFACE_1
+            } else {
+                SURFACE_0
+            }
+        }
+        button::Status::Hovered => SURFACE_1,
+        button::Status::Pressed => SURFACE_2,
+        button::Status::Disabled => SURFACE_0,
     };
 
     button::Style {
@@ -112,8 +174,8 @@ pub fn section_tab_button(active: bool, _theme: &Theme, status: button::Status) 
         text_color: if active { TEXT } else { TEXT_MUTED },
         border: Border {
             radius: 0.0.into(),
-            width: if active { 1.0 } else { 0.0 },
-            color: if active { PRIMARY } else { BORDER },
+            width: 0.0,
+            color: Color::TRANSPARENT,
         },
         shadow: Default::default(),
     }

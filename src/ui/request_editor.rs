@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, row, text, text_editor};
+use iced::widget::{button, column, container, horizontal_rule, row, text, text_editor};
 use iced::{Element, Length};
 
 use crate::auth::AuthType;
@@ -44,11 +44,18 @@ pub fn view<'a>(state: RequestEditorState<'a>) -> Element<'a, Message> {
     };
 
     column![
-        tabs,
+        container(tabs)
+            .style(|_| style::flat_surface_style(style::SURFACE_0)),
+        horizontal_rule(1).style(|_| iced::widget::rule::Style {
+            color: style::BORDER,
+            width: 1,
+            radius: 0.0.into(),
+            fill_mode: iced::widget::rule::FillMode::Full,
+        }),
         container(body)
             .padding(12)
             .height(Length::Fill)
-            .style(|_| style::surface_style(style::SURFACE_1, 0.0))
+            .style(|_| style::flat_surface_style(style::SURFACE_0))
     ]
     .height(Length::Fill)
     .spacing(0)
@@ -60,9 +67,20 @@ fn tab_button<'a>(
     tab: RequestEditorTab,
     active: RequestEditorTab,
 ) -> iced::widget::Button<'a, Message> {
-    button(text(label).size(12))
-        .on_press(Message::RequestTabSelected(tab))
-        .width(Length::Fill)
-        .padding([8, 10])
-        .style(move |theme, status| style::section_tab_button(tab == active, theme, status))
+    let is_active = tab == active;
+    button(
+        column![
+            container(text(label).size(12).color(if is_active { style::TEXT } else { style::TEXT_MUTED }))
+                .padding([8, 14])
+                .center_y(Length::Fill),
+            container(text("").size(2))
+                .height(2)
+                .width(Length::Fill)
+                .style(move |_| style::flat_surface_style(if is_active { style::PRIMARY } else { style::SURFACE_0 })),
+        ]
+        .height(Length::Fill)
+    )
+    .on_press(Message::RequestTabSelected(tab))
+    .padding(0)
+    .style(move |theme, status| style::section_tab_button(is_active, theme, status))
 }

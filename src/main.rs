@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use auth::{AuthInput, AuthType};
 use collections::SavedRequest;
 use history::{History, HistoryEntry};
-use iced::widget::{column, container, row, text, text_editor};
+use iced::widget::{column, container, row, text_editor};
 use iced::{Element, Length, Task};
 use ui::style;
 
@@ -384,7 +384,7 @@ fn view(app: &App) -> Element<'_, Message> {
                 &app.history,
                 app.active_environment,
             ))
-            .width(280)
+            .width(260)
             .height(Length::Fill),
         )
     } else {
@@ -392,8 +392,8 @@ fn view(app: &App) -> Element<'_, Message> {
     };
 
     let request_bar = container(ui::request_bar::view(app.method, &app.url, app.loading))
-        .padding(12)
-        .style(|_| style::surface_style(style::SURFACE_1, 0.0));
+        .padding(10)
+        .style(|_| style::flat_surface_style(style::SURFACE_0));
 
     let request_editor = ui::request_editor::view(ui::request_editor::RequestEditorState {
         active_tab: app.request_tab,
@@ -410,7 +410,14 @@ fn view(app: &App) -> Element<'_, Message> {
 
     let request_section = container(column![request_bar, request_editor].spacing(0).height(Length::Fill))
         .height(Length::FillPortion(45))
-        .style(|_| style::surface_style(style::SURFACE_0, 0.0));
+        .style(|_| style::flat_surface_style(style::SURFACE_0));
+
+    let divider = iced::widget::horizontal_rule(1).style(|_| iced::widget::rule::Style {
+        color: style::BORDER,
+        width: 1,
+        radius: 0.0.into(),
+        fill_mode: iced::widget::rule::FillMode::Full,
+    });
 
     let response_section = container(ui::response_panel::view(
         app.error.as_deref(),
@@ -419,13 +426,10 @@ fn view(app: &App) -> Element<'_, Message> {
         app.response_tab,
     ))
     .height(Length::FillPortion(55))
-    .style(|_| style::surface_style(style::SURFACE_0, 0.0));
+    .style(|_| style::flat_surface_style(style::SURFACE_0));
 
-    let tab_bar = container(row![text("Request 1").size(12).color(style::TEXT_MUTED)].padding([8, 12]))
-        .style(|_| style::surface_style(style::SURFACE_1, 0.0));
-
-    let main_content = column![tab_bar, request_section, response_section]
-        .spacing(1)
+    let main_content = column![request_section, divider, response_section]
+        .spacing(0)
         .height(Length::Fill)
         .width(Length::Fill);
 
@@ -440,7 +444,7 @@ fn view(app: &App) -> Element<'_, Message> {
     };
 
     let layout = column![header, body]
-        .spacing(1)
+        .spacing(0)
         .height(Length::Fill)
         .width(Length::Fill);
 
