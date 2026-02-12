@@ -6,6 +6,8 @@ use crate::{Message, ResponseTab};
 
 use super::style;
 
+const RESPONSE_FONT_SIZE: u16 = 13;
+
 pub fn view<'a>(
     error: Option<&str>,
     response: Option<&'a HttpResponse>,
@@ -73,7 +75,7 @@ pub fn view<'a>(
                     response.body.clone()
                 };
                 scrollable(
-                    container(text(body_content).size(13).font(iced::Font::MONOSPACE))
+                    container(text(body_content).size(RESPONSE_FONT_SIZE).font(iced::Font::MONOSPACE))
                         .padding(12)
                         .width(Length::Fill)
                         .style(|_| style::flat_surface_style(style::SURFACE_0)),
@@ -82,7 +84,7 @@ pub fn view<'a>(
                 .into()
             }
             ResponseTab::Headers => scrollable(
-                container(text(&response.headers).size(13).font(iced::Font::MONOSPACE))
+                container(text(&response.headers).size(RESPONSE_FONT_SIZE).font(iced::Font::MONOSPACE))
                     .padding(12)
                     .width(Length::Fill)
                     .style(|_| style::flat_surface_style(style::SURFACE_0)),

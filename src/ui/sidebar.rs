@@ -10,6 +10,9 @@ use crate::{EnvironmentOption, Message, SidebarView};
 
 use super::style;
 
+const MAX_URL_DISPLAY_COLLECTION: usize = 28;
+const MAX_URL_DISPLAY_HISTORY: usize = 22;
+
 pub fn view<'a>(
     sidebar_view: SidebarView,
     saved_requests: &'a [SavedRequest],
@@ -104,7 +107,7 @@ fn collections_view<'a>(saved_requests: &'a [SavedRequest]) -> Element<'a, Messa
         list = list.push(text("No saved requests").size(12).color(style::TEXT_MUTED));
     } else {
         for (index, request) in saved_requests.iter().enumerate() {
-            let url_text = truncate_url(&request.url, 28);
+            let url_text = truncate_url(&request.url, MAX_URL_DISPLAY_COLLECTION);
             let item_btn = button(
                 row![
                     method_badge(request.method),
@@ -150,7 +153,7 @@ fn history_view<'a>(history: &'a History) -> Element<'a, Message> {
         list = list.push(text("No history").size(12).color(style::TEXT_MUTED));
     } else {
         for (index, entry) in history.entries().iter().enumerate() {
-            let url_text = truncate_url(&entry.url, 22);
+            let url_text = truncate_url(&entry.url, MAX_URL_DISPLAY_HISTORY);
             let time_text = relative_time(entry.timestamp);
             let status_info = entry
                 .status

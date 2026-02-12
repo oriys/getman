@@ -29,7 +29,7 @@ pub fn view<'a>(
         row![
             sidebar_toggle,
             text("Getman").size(16),
-            text("v0.1").size(10).color(style::TEXT_MUTED),
+            text(format!("v{}", env!("CARGO_PKG_VERSION"))).size(10).color(style::TEXT_MUTED),
             horizontal_space(),
             env_select
         ]
