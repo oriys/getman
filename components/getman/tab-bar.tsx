@@ -1,11 +1,12 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { Plus, X, Copy } from "lucide-react";
 import {
   useGetmanStore,
   setActiveTabId,
   addTab,
   closeTab,
+  duplicateTab,
 } from "@/lib/getman-store";
 import { MethodBadge } from "./method-badge";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
@@ -35,6 +36,24 @@ export function TabBar() {
                   {tab.url
                     ? tab.url.replace(/^https?:\/\//, "").slice(0, 30)
                     : tab.name}
+                </span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    duplicateTab(tab.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.stopPropagation();
+                      duplicateTab(tab.id);
+                    }
+                  }}
+                  className="opacity-0 group-hover:opacity-100 hover:text-primary transition-opacity"
+                  title="Duplicate Tab"
+                >
+                  <Copy className="h-3 w-3" />
                 </span>
                 {tabs.length > 1 && (
                   <span

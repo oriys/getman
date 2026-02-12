@@ -10,6 +10,10 @@ import {
   Plus,
   Clock,
   ChevronDown,
+  Search,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import {
   useGetmanStore,
@@ -19,7 +23,9 @@ import {
   clearHistory,
   addCollection,
   deleteCollection,
+  renameCollection,
   deleteRequestFromCollection,
+  renameRequestInCollection,
   setActiveEnvironment,
   addEnvironment,
   deleteEnvironment,
@@ -77,6 +83,11 @@ function CollectionsView() {
   );
   const [newCollectionName, setNewCollectionName] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [editingCollectionId, setEditingCollectionId] = useState<string | null>(null);
+  const [editingCollectionName, setEditingCollectionName] = useState("");
+  const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
+  const [editingRequestName, setEditingRequestName] = useState("");
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -94,6 +105,23 @@ function CollectionsView() {
       setDialogOpen(false);
     }
   };
+
+  const filteredCollections = searchQuery.trim()
+    ? collections
+        .map((col) => ({
+          ...col,
+          requests: col.requests.filter(
+            (req) =>
+              req.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              req.url.toLowerCase().includes(searchQuery.toLowerCase())
+          ),
+        }))
+        .filter(
+          (col) =>
+            col.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            col.requests.length > 0
+        )
+    : collections;
 
   return (
     <div className="flex flex-col h-full">
@@ -135,10 +163,33 @@ function CollectionsView() {
         </Dialog>
       </div>
 
+      {/* Search bar */}
+      <div className="px-2 py-1.5 border-b border-border/40">
+        <div className="flex items-center gap-1.5 bg-[hsl(var(--surface-2))] rounded px-2 py-1">
+          <Search className="h-3 w-3 text-muted-foreground shrink-0" />
+          <input
+            className="flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground/50"
+            placeholder="Search collections..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+
       <ScrollArea className="flex-1">
         <div className="py-1">
-          {collections.map((col) => {
+          {filteredCollections.map((col) => {
             const isExpanded = expandedIds.has(col.id);
+            const isEditingCol = editingCollectionId === col.id;
             return (
               <div key={col.id}>
                 <div className="group flex items-center gap-1.5 px-2 py-1.5 hover:bg-[hsl(var(--surface-2))] cursor-pointer">
@@ -154,12 +205,54 @@ function CollectionsView() {
                     )}
                   </button>
                   <FolderOpen className="h-3.5 w-3.5 text-primary/70 shrink-0" />
-                  <span className="text-xs text-foreground flex-1 truncate">
-                    {col.name}
-                  </span>
+                  {isEditingCol ? (
+                    <input
+                      className="flex-1 bg-[hsl(var(--surface-2))] border border-primary/50 rounded text-xs text-foreground px-1.5 py-0.5 outline-none"
+                      value={editingCollectionName}
+                      onChange={(e) => setEditingCollectionName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && editingCollectionName.trim()) {
+                          renameCollection(col.id, editingCollectionName.trim());
+                          setEditingCollectionId(null);
+                        } else if (e.key === "Escape") {
+                          setEditingCollectionId(null);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (editingCollectionName.trim()) {
+                          renameCollection(col.id, editingCollectionName.trim());
+                        }
+                        setEditingCollectionId(null);
+                      }}
+                      autoFocus
+                    />
+                  ) : (
+                    <span
+                      className="text-xs text-foreground flex-1 truncate"
+                      onDoubleClick={() => {
+                        setEditingCollectionId(col.id);
+                        setEditingCollectionName(col.name);
+                      }}
+                    >
+                      {col.name}
+                    </span>
+                  )}
                   <span className="text-[10px] text-muted-foreground">
                     {col.requests.length}
                   </span>
+                  {!isEditingCol && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCollectionId(col.id);
+                        setEditingCollectionName(col.name);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                      title="Rename collection"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => deleteCollection(col.id)}
@@ -169,38 +262,87 @@ function CollectionsView() {
                   </button>
                 </div>
                 {isExpanded &&
-                  col.requests.map((req) => (
-                    <div
-                      key={req.id}
-                      className="group flex items-center gap-2 pl-8 pr-2 py-1.5 hover:bg-[hsl(var(--surface-2))] cursor-pointer"
-                      onClick={() => loadSavedRequest(req)}
-                      onKeyDown={(e) => e.key === "Enter" && loadSavedRequest(req)}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <MethodBadge method={req.method} size="sm" />
-                      <span className="text-xs text-foreground/80 flex-1 truncate font-mono">
-                        {req.name}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteRequestFromCollection(col.id, req.id);
-                        }}
-                        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                  col.requests.map((req) => {
+                    const isEditingReq = editingRequestId === req.id;
+                    return (
+                      <div
+                        key={req.id}
+                        className="group flex items-center gap-2 pl-8 pr-2 py-1.5 hover:bg-[hsl(var(--surface-2))] cursor-pointer"
+                        onClick={() => !isEditingReq && loadSavedRequest(req)}
+                        onKeyDown={(e) => e.key === "Enter" && !isEditingReq && loadSavedRequest(req)}
+                        role="button"
+                        tabIndex={0}
                       >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
+                        <MethodBadge method={req.method} size="sm" />
+                        {isEditingReq ? (
+                          <input
+                            className="flex-1 bg-[hsl(var(--surface-2))] border border-primary/50 rounded text-xs text-foreground/80 font-mono px-1.5 py-0.5 outline-none"
+                            value={editingRequestName}
+                            onChange={(e) => setEditingRequestName(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === "Enter" && editingRequestName.trim()) {
+                                renameRequestInCollection(col.id, req.id, editingRequestName.trim());
+                                setEditingRequestId(null);
+                              } else if (e.key === "Escape") {
+                                setEditingRequestId(null);
+                              }
+                            }}
+                            onBlur={() => {
+                              if (editingRequestName.trim()) {
+                                renameRequestInCollection(col.id, req.id, editingRequestName.trim());
+                              }
+                              setEditingRequestId(null);
+                            }}
+                            autoFocus
+                          />
+                        ) : (
+                          <span
+                            className="text-xs text-foreground/80 flex-1 truncate font-mono"
+                            onDoubleClick={(e) => {
+                              e.stopPropagation();
+                              setEditingRequestId(req.id);
+                              setEditingRequestName(req.name);
+                            }}
+                          >
+                            {req.name}
+                          </span>
+                        )}
+                        {!isEditingReq && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingRequestId(req.id);
+                              setEditingRequestName(req.name);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                            title="Rename request"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteRequestFromCollection(col.id, req.id);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
               </div>
             );
           })}
-          {collections.length === 0 && (
+          {filteredCollections.length === 0 && (
             <div className="px-4 py-8 text-center">
               <p className="text-xs text-muted-foreground">
-                No collections yet
+                {searchQuery ? "No matching results" : "No collections yet"}
               </p>
             </div>
           )}

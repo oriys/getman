@@ -135,6 +135,78 @@ function ResponseHeaders({ headers }: { headers: Record<string, string> }) {
   );
 }
 
+interface ParsedCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  expires?: string;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite?: string;
+}
+
+function parseCookies(headers: Record<string, string>): ParsedCookie[] {
+  const cookies: ParsedCookie[] = [];
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== "set-cookie") continue;
+    for (const raw of value.split(/,(?=\s*\w+=)/)) {
+      const parts = raw.split(";").map((s) => s.trim());
+      const [first, ...attrs] = parts;
+      if (!first) continue;
+      const eqIdx = first.indexOf("=");
+      const cookie: ParsedCookie = {
+        name: eqIdx > -1 ? first.slice(0, eqIdx) : first,
+        value: eqIdx > -1 ? first.slice(eqIdx + 1) : "",
+        httpOnly: false,
+        secure: false,
+      };
+      for (const attr of attrs) {
+        const lower = attr.toLowerCase();
+        if (lower.startsWith("domain=")) cookie.domain = attr.slice(7);
+        else if (lower.startsWith("path=")) cookie.path = attr.slice(5);
+        else if (lower.startsWith("expires=")) cookie.expires = attr.slice(8);
+        else if (lower.startsWith("samesite=")) cookie.sameSite = attr.slice(9);
+        else if (lower === "httponly") cookie.httpOnly = true;
+        else if (lower === "secure") cookie.secure = true;
+      }
+      cookies.push(cookie);
+    }
+  }
+  return cookies;
+}
+
+function ResponseCookies({ headers }: { headers: Record<string, string> }) {
+  const cookies = useMemo(() => parseCookies(headers), [headers]);
+
+  if (cookies.length === 0) {
+    return (
+      <p className="text-muted-foreground text-sm p-4">No cookies returned</p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col">
+      {cookies.map((cookie, i) => (
+        <div key={`${cookie.name}-${i}`} className="border-b border-border/35 px-4 py-2 hover:bg-[hsl(var(--surface-2)/.55)]">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-mono font-bold text-[hsl(var(--chart-2))]">{cookie.name}</span>
+            <span className="text-xs font-mono text-foreground break-all">= {cookie.value}</span>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-muted-foreground font-mono">
+            {cookie.domain && <span>Domain: {cookie.domain}</span>}
+            {cookie.path && <span>Path: {cookie.path}</span>}
+            {cookie.expires && <span>Expires: {cookie.expires}</span>}
+            {cookie.sameSite && <span>SameSite: {cookie.sameSite}</span>}
+            {cookie.httpOnly && <span className="text-amber-500">HttpOnly</span>}
+            {cookie.secure && <span className="text-green-500">Secure</span>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ResponseViewer() {
   const { response, isLoading } = useGetmanStore();
 
@@ -198,6 +270,15 @@ export function ResponseViewer() {
               ({Object.keys(response.headers).length})
             </span>
           </TabsTrigger>
+          <TabsTrigger
+            value="cookies"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground text-muted-foreground text-xs px-4 py-2 font-medium"
+          >
+            Cookies
+            <span className="ml-1.5 text-[10px] text-muted-foreground">
+              ({parseCookies(response.headers).length})
+            </span>
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="body" className="m-0 min-h-0 flex-1 overflow-auto p-4">
@@ -206,6 +287,10 @@ export function ResponseViewer() {
 
         <TabsContent value="headers" className="m-0 flex-1 overflow-auto min-h-0">
           <ResponseHeaders headers={response.headers} />
+        </TabsContent>
+
+        <TabsContent value="cookies" className="m-0 flex-1 overflow-auto min-h-0">
+          <ResponseCookies headers={response.headers} />
         </TabsContent>
       </Tabs>
     </div>
