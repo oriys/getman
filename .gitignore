@@ -12,3 +12,5 @@ src-tauri/gen/
 target/
 .env*.local
 .DS_Store
+package-lock.json
+tsconfig.tsbuildinfo
