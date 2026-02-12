@@ -11,18 +11,30 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
+use crate::auth::AuthType;
+use crate::http::method::HttpMethod;
+
 /// A unique identifier for a collection item.
 pub type CollectionId = u64;
 
 /// Represents a saved HTTP request within a collection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedRequest {
     pub id: CollectionId,
     pub name: String,
-    pub method: String,
+    pub method: HttpMethod,
     pub url: String,
+    pub params: String,
     pub headers: String,
     pub body: String,
+    pub auth_type: AuthType,
+    pub auth_bearer_token: String,
+    pub auth_basic_username: String,
+    pub auth_basic_password: String,
+    pub auth_api_key: String,
+    pub auth_api_value: String,
 }
 
 /// Represents a folder that can contain requests or sub-folders.

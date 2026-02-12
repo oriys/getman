@@ -7,9 +7,9 @@ use super::style;
 
 pub fn view<'a>(editor: &'a text_editor::Content) -> Element<'a, Message> {
     column![
-        text("Headers (one per line, format: Key: Value)").size(14),
+        text("Params (one per line, format: key=value)").size(14),
         text_editor(editor)
-            .on_action(Message::HeadersEdited)
+            .on_action(Message::ParamsEdited)
             .height(Length::Fill)
             .style(style::editor_style),
     ]

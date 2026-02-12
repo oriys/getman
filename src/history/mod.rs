@@ -10,13 +10,15 @@
 
 use std::collections::VecDeque;
 
+use serde::{Deserialize, Serialize};
+
 use crate::http::method::HttpMethod;
 
 /// Maximum number of history entries to retain.
 const MAX_HISTORY_ENTRIES: usize = 100;
 
 /// A single history entry recording a past request and its outcome.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub timestamp: u64,
     pub method: HttpMethod,
@@ -26,7 +28,7 @@ pub struct HistoryEntry {
 }
 
 /// Manages the request history list.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct History {
     entries: VecDeque<HistoryEntry>,
 }
