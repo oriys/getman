@@ -21,6 +21,27 @@ export interface KeyValue {
   enabled: boolean;
 }
 
+// Script types for Layer 3: Test & Script Engine
+export interface Script {
+  id: string;
+  type: "pre-request" | "test";
+  code: string;
+  enabled: boolean;
+}
+
+export interface TestAssertion {
+  id: string;
+  type: "status" | "header" | "body-contains" | "json-path" | "response-time";
+  name: string;
+  enabled: boolean;
+  expectedStatus?: number;
+  headerKey?: string;
+  headerValue?: string;
+  bodyValue?: string;
+  jsonPath?: string;
+  maxResponseTime?: number;
+}
+
 export interface RequestTab {
   id: string;
   name: string;
@@ -38,6 +59,11 @@ export interface RequestTab {
   authApiKey: string;
   authApiValue: string;
   authApiAddTo: "header" | "query";
+  
+  // Layer 3: Scripts and tests
+  preRequestScript?: Script;
+  testScript?: Script;
+  assertions?: TestAssertion[];
 }
 
 export interface ResponseData {
@@ -59,18 +85,41 @@ export interface HistoryItem {
   timestamp: number;
 }
 
+export interface CollectionFolder {
+  id: string;
+  name: string;
+  description?: string;
+  requests: SavedRequest[];
+  folders: CollectionFolder[];  // Nested folders
+}
+
 export interface Collection {
   id: string;
   name: string;
+  description?: string;
   requests: SavedRequest[];
+  folders: CollectionFolder[];
+  
+  // Collection-level scripts (Layer 3)
+  preRequestScript?: Script;
+  testScript?: Script;
+  
+  // Collection-level variables (Layer 4)
+  variables?: KeyValue[];
 }
 
 export interface SavedRequest {
   id: string;
   name: string;
+  description?: string;
   method: HttpMethod;
   url: string;
   tab: RequestTab;
+  
+  // Layer 3: Scripts and tests
+  preRequestScript?: Script;
+  testScript?: Script;
+  assertions?: TestAssertion[];
 }
 
 export interface EnvVariable {
@@ -86,6 +135,33 @@ export interface Environment {
   variables: EnvVariable[];
 }
 
+// Layer 3: Test Results
+export interface TestResult {
+  id: string;
+  assertionId: string;
+  name: string;
+  passed: boolean;
+  message: string;
+  actualValue?: unknown;
+  expectedValue?: unknown;
+}
+
+// Layer 4: Collection Runner
+export interface CollectionRunResult {
+  runId: string;
+  collectionId: string;
+  collectionName: string;
+  startTime: number;
+  endTime: number;
+  duration: number;
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+}
+
 export interface GetmanState {
   tabs: RequestTab[];
   activeTabId: string;
@@ -97,6 +173,13 @@ export interface GetmanState {
   activeEnvironmentId: string | null;
   sidebarView: "collections" | "history" | "environments";
   sidebarOpen: boolean;
+  
+  // Layer 3: Test results for active request
+  testResults?: TestResult[];
+  
+  // Layer 4: Collection runner state
+  collectionRunResults: CollectionRunResult[];
+  isRunningCollection: boolean;
 }
 
 interface PersistedState {
@@ -163,6 +246,9 @@ function createInitialState(): GetmanState {
     activeEnvironmentId: null,
     sidebarView: "collections",
     sidebarOpen: true,
+    testResults: undefined,
+    collectionRunResults: [],
+    isRunningCollection: false,
   };
 }
 
@@ -202,6 +288,9 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : true,
     response: null,
     isLoading: false,
+    testResults: undefined,
+    collectionRunResults: [],
+    isRunningCollection: false,
   };
 }
 
@@ -358,7 +447,13 @@ export function setActiveEnvironment(id: string | null) {
 }
 
 export function addCollection(name: string) {
-  const col: Collection = { id: uid(), name, requests: [] };
+  const col: Collection = { 
+    id: uid(), 
+    name, 
+    requests: [],
+    folders: [],
+    variables: []
+  };
   setState({ collections: [...state.collections, col] });
 }
 
@@ -454,6 +549,58 @@ export function resolveEnvVariables(input: string): string {
     }
   }
   return result;
+}
+
+// ─── Layer 3: Test & Script Actions ───────────────────────────────────────────
+
+export function setTestResults(results: TestResult[]) {
+  setState({ testResults: results }, { persist: false });
+}
+
+export function clearTestResults() {
+  setState({ testResults: undefined }, { persist: false });
+}
+
+export function addFolderToCollection(collectionId: string, folderName: string) {
+  const collections = state.collections.map((c) => {
+    if (c.id === collectionId) {
+      const folder: CollectionFolder = {
+        id: uid(),
+        name: folderName,
+        requests: [],
+        folders: []
+      };
+      return { ...c, folders: [...c.folders, folder] };
+    }
+    return c;
+  });
+  setState({ collections });
+}
+
+export function deleteFolderFromCollection(collectionId: string, folderId: string) {
+  const collections = state.collections.map((c) => {
+    if (c.id === collectionId) {
+      return { ...c, folders: c.folders.filter((f) => f.id !== folderId) };
+    }
+    return c;
+  });
+  setState({ collections });
+}
+
+// ─── Layer 4: Collection Runner Actions ───────────────────────────────────────
+
+export function setIsRunningCollection(isRunning: boolean) {
+  setState({ isRunningCollection: isRunning }, { persist: false });
+}
+
+export function addCollectionRunResult(result: CollectionRunResult) {
+  setState({ 
+    collectionRunResults: [result, ...state.collectionRunResults].slice(0, 50)
+  });
+}
+
+export function clearCollectionRunResults() {
+  setState({ collectionRunResults: [] });
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
