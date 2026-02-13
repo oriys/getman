@@ -12,6 +12,7 @@ export function RequestEditor() {
 
   const enabledParams = tab.params.filter((p) => p.enabled && p.key).length;
   const enabledHeaders = tab.headers.filter((h) => h.enabled && h.key).length;
+  const enabledCookies = (tab.cookies ?? []).filter((c) => c.enabled && c.key).length;
 
   return (
     <Tabs defaultValue="params" className="flex flex-col h-full">
@@ -21,6 +22,7 @@ export function RequestEditor() {
           { value: "headers", label: "Headers", count: enabledHeaders },
           { value: "body", label: "Body" },
           { value: "auth", label: "Auth" },
+          { value: "cookies", label: "Cookies", count: enabledCookies },
         ].map((t) => (
           <TabsTrigger
             key={t.value}
@@ -62,6 +64,15 @@ export function RequestEditor() {
 
         <TabsContent value="auth" className="m-0 h-full">
           <AuthEditor />
+        </TabsContent>
+
+        <TabsContent value="cookies" className="m-0 h-full">
+          <KVEditor
+            items={tab.cookies ?? []}
+            onChange={(cookies) => updateActiveTab({ cookies })}
+            keyPlaceholder="Cookie Name"
+            valuePlaceholder="Cookie Value"
+          />
         </TabsContent>
       </div>
     </Tabs>

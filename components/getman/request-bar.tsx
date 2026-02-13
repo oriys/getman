@@ -152,6 +152,18 @@ export function RequestBar() {
         }
       }
 
+      // Cookies
+      const cookies = tab.cookies ?? [];
+      const cookieParts: string[] = [];
+      for (const c of cookies) {
+        if (c.enabled && c.key) {
+          cookieParts.push(`${resolveEnvVariables(c.key)}=${resolveEnvVariables(c.value)}`);
+        }
+      }
+      if (cookieParts.length > 0) {
+        headers["Cookie"] = cookieParts.join("; ");
+      }
+
       // Auth headers
       if (tab.authType === "bearer" && tab.authToken) {
         headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.authToken)}`;
@@ -194,6 +206,21 @@ export function RequestBar() {
           }
           headers["Content-Type"] = headers["Content-Type"] || "application/json";
           body = JSON.stringify(obj);
+        } else if (tab.bodyType === "graphql") {
+          headers["Content-Type"] = headers["Content-Type"] || "application/json";
+          let variables = {};
+          try {
+            variables = JSON.parse(resolveEnvVariables(tab.graphqlVariables || "{}"));
+          } catch {
+            // Keep empty variables on parse error
+          }
+          body = JSON.stringify({
+            query: resolveEnvVariables(tab.graphqlQuery),
+            variables,
+          });
+        } else if (tab.bodyType === "binary") {
+          headers["Content-Type"] = headers["Content-Type"] || "application/octet-stream";
+          body = tab.bodyContent;
         }
       }
 
