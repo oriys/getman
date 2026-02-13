@@ -1,10 +1,14 @@
 "use client";
 
+import { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import {
   useActiveTab,
   updateActiveTab,
   type RequestTab,
+  type OAuth2GrantType,
 } from "@/lib/getman-store";
+import { maskToken } from "@/lib/crypto";
 import {
   Select,
   SelectContent,
@@ -18,7 +22,47 @@ const authTypes: { value: RequestTab["authType"]; label: string }[] = [
   { value: "bearer", label: "Bearer Token" },
   { value: "basic", label: "Basic Auth" },
   { value: "api-key", label: "API Key" },
+  { value: "oauth2", label: "OAuth 2.0" },
 ];
+
+function SensitiveInputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-[11px] font-medium text-muted-foreground">
+        {label}
+      </label>
+      <div className="relative">
+        <input
+          type={visible ? "text" : "password"}
+          className="w-full rounded border border-border bg-[hsl(var(--surface-1))] px-3 py-2 pr-8 font-mono text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/50"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => setVisible(!visible)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+          title={visible ? "Hide" : "Show"}
+        >
+          {visible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function InputField({
   label,
@@ -85,7 +129,7 @@ export function AuthEditor() {
       )}
 
       {tab.authType === "bearer" && (
-        <InputField
+        <SensitiveInputField
           label="Token"
           value={tab.authToken}
           onChange={(v) => updateActiveTab({ authToken: v })}
@@ -101,12 +145,11 @@ export function AuthEditor() {
             onChange={(v) => updateActiveTab({ authUsername: v })}
             placeholder="Username"
           />
-          <InputField
+          <SensitiveInputField
             label="Password"
             value={tab.authPassword}
             onChange={(v) => updateActiveTab({ authPassword: v })}
             placeholder="Password"
-            type="password"
           />
         </div>
       )}
@@ -119,7 +162,7 @@ export function AuthEditor() {
             onChange={(v) => updateActiveTab({ authApiKey: v })}
             placeholder="X-API-Key"
           />
-          <InputField
+          <SensitiveInputField
             label="Value"
             value={tab.authApiValue}
             onChange={(v) => updateActiveTab({ authApiValue: v })}
@@ -149,6 +192,93 @@ export function AuthEditor() {
                 </SelectItem>
               </SelectContent>
             </Select>
+          </div>
+        </div>
+      )}
+
+      {tab.authType === "oauth2" && (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11px] font-medium text-muted-foreground">
+              Grant Type
+            </label>
+            <Select
+              value={tab.oauth2GrantType || "authorization_code"}
+              onValueChange={(v) =>
+                updateActiveTab({ oauth2GrantType: v as OAuth2GrantType })
+              }
+            >
+              <SelectTrigger className="h-8 w-[250px] border-border bg-[hsl(var(--surface-1))] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
+                <SelectItem value="authorization_code" className="text-xs">
+                  Authorization Code
+                </SelectItem>
+                <SelectItem value="client_credentials" className="text-xs">
+                  Client Credentials
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {tab.oauth2GrantType === "authorization_code" && (
+            <InputField
+              label="Auth URL"
+              value={tab.oauth2AuthUrl || ""}
+              onChange={(v) => updateActiveTab({ oauth2AuthUrl: v })}
+              placeholder="https://provider.com/oauth/authorize"
+            />
+          )}
+
+          <InputField
+            label="Token URL"
+            value={tab.oauth2TokenUrl || ""}
+            onChange={(v) => updateActiveTab({ oauth2TokenUrl: v })}
+            placeholder="https://provider.com/oauth/token"
+          />
+
+          <InputField
+            label="Client ID"
+            value={tab.oauth2ClientId || ""}
+            onChange={(v) => updateActiveTab({ oauth2ClientId: v })}
+            placeholder="Your client ID"
+          />
+
+          <SensitiveInputField
+            label="Client Secret"
+            value={tab.oauth2ClientSecret || ""}
+            onChange={(v) => updateActiveTab({ oauth2ClientSecret: v })}
+            placeholder="Your client secret"
+          />
+
+          <InputField
+            label="Scope"
+            value={tab.oauth2Scope || ""}
+            onChange={(v) => updateActiveTab({ oauth2Scope: v })}
+            placeholder="read write (space-separated)"
+          />
+
+          {tab.oauth2GrantType === "authorization_code" && (
+            <InputField
+              label="Callback URL"
+              value={tab.oauth2CallbackUrl || "http://localhost/callback"}
+              onChange={(v) => updateActiveTab({ oauth2CallbackUrl: v })}
+              placeholder="http://localhost/callback"
+            />
+          )}
+
+          <div className="border-t border-border/50 pt-3">
+            <SensitiveInputField
+              label="Access Token"
+              value={tab.oauth2AccessToken || ""}
+              onChange={(v) => updateActiveTab({ oauth2AccessToken: v })}
+              placeholder="Paste access token or use Get Token button"
+            />
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              For Authorization Code flow: copy the token from your OAuth provider.
+              For Client Credentials: the token will be sent automatically with the Token URL.
+            </p>
           </div>
         </div>
       )}

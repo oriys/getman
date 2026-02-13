@@ -5,6 +5,7 @@ import { useActiveTab, updateActiveTab } from "@/lib/getman-store";
 import { KVEditor } from "./kv-editor";
 import { AuthEditor } from "./auth-editor";
 import { BodyEditor } from "./body-editor";
+import { AssertionEditor } from "./assertion-editor";
 
 export function RequestEditor() {
   const tab = useActiveTab();
@@ -13,6 +14,7 @@ export function RequestEditor() {
   const enabledParams = tab.params.filter((p) => p.enabled && p.key).length;
   const enabledHeaders = tab.headers.filter((h) => h.enabled && h.key).length;
   const enabledCookies = (tab.cookies ?? []).filter((c) => c.enabled && c.key).length;
+  const assertionCount = (tab.assertions ?? []).length;
 
   return (
     <Tabs defaultValue="params" className="flex flex-col h-full">
@@ -23,6 +25,7 @@ export function RequestEditor() {
           { value: "body", label: "Body" },
           { value: "auth", label: "Auth" },
           { value: "cookies", label: "Cookies", count: enabledCookies },
+          { value: "tests", label: "Tests", count: assertionCount },
         ].map((t) => (
           <TabsTrigger
             key={t.value}
@@ -73,6 +76,10 @@ export function RequestEditor() {
             keyPlaceholder="Cookie Name"
             valuePlaceholder="Cookie Value"
           />
+        </TabsContent>
+
+        <TabsContent value="tests" className="m-0 h-full">
+          <AssertionEditor />
         </TabsContent>
       </div>
     </Tabs>

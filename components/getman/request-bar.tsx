@@ -2,19 +2,24 @@
 
 import React from "react"
 
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, X, Settings2 } from "lucide-react";
 import {
   useActiveTab,
   useGetmanStore,
   updateActiveTab,
   setResponse,
   setIsLoading,
+  setActiveRequestId,
+  setAssertionResults,
   addHistoryItem,
   resolveEnvVariables,
   uid,
   type HttpMethod,
+  type RequestSettings,
+  defaultSettings,
 } from "@/lib/getman-store";
-import { sendHttpRequest } from "@/lib/tauri";
+import { sendHttpRequest, cancelHttpRequest } from "@/lib/tauri";
+import { runAssertions } from "@/lib/assertions";
 import { isCurlCommand, parseCurlCommand } from "@/lib/curl-parser";
 import { CodeGeneratorDialog } from "./code-generator-dialog";
 import {
@@ -24,6 +29,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 const methods: HttpMethod[] = [
   "GET",
@@ -45,16 +57,136 @@ const methodTextColors: Record<HttpMethod, string> = {
   OPTIONS: "text-[hsl(var(--method-options))]",
 };
 
+function RequestSettingsDialog() {
+  const tab = useActiveTab();
+  if (!tab) return null;
+
+  const settings = tab.settings || defaultSettings();
+
+  const updateSettings = (partial: Partial<RequestSettings>) => {
+    updateActiveTab({ settings: { ...settings, ...partial } });
+  };
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          className="flex h-11 items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors border-r border-border/80"
+          title="Request Settings"
+        >
+          <Settings2 className="h-4 w-4" />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="bg-[hsl(var(--surface-1))] border-border sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle className="text-foreground text-sm">Request Settings</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          {/* Timeout */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11px] font-medium text-muted-foreground">
+              Timeout (ms) — 0 = no timeout
+            </label>
+            <input
+              type="number"
+              className="rounded border border-border bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary/50"
+              value={settings.timeoutMs}
+              onChange={(e) => updateSettings({ timeoutMs: Math.max(0, Number(e.target.value)) })}
+              min={0}
+              step={1000}
+            />
+          </div>
+
+          {/* Retry */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[11px] font-medium text-muted-foreground">
+                Retry Count
+              </label>
+              <input
+                type="number"
+                className="rounded border border-border bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary/50"
+                value={settings.retryCount}
+                onChange={(e) => updateSettings({ retryCount: Math.max(0, Math.min(10, Number(e.target.value))) })}
+                min={0}
+                max={10}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[11px] font-medium text-muted-foreground">
+                Retry Delay (ms)
+              </label>
+              <input
+                type="number"
+                className="rounded border border-border bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary/50"
+                value={settings.retryDelayMs}
+                onChange={(e) => updateSettings({ retryDelayMs: Math.max(0, Number(e.target.value)) })}
+                min={0}
+                step={500}
+              />
+            </div>
+          </div>
+
+          {/* Proxy */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11px] font-medium text-muted-foreground">
+              Proxy URL (e.g., http://proxy:8080 or socks5://proxy:1080)
+            </label>
+            <input
+              type="text"
+              className="rounded border border-border bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40 focus:border-primary/50"
+              placeholder="Leave empty for direct connection"
+              value={settings.proxyUrl}
+              onChange={(e) => updateSettings({ proxyUrl: e.target.value })}
+            />
+          </div>
+
+          {/* SSL Verification */}
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="verify-ssl"
+              checked={settings.verifySsl}
+              onChange={(e) => updateSettings({ verifySsl: e.target.checked })}
+              className="h-3.5 w-3.5 rounded border-border accent-primary"
+            />
+            <label htmlFor="verify-ssl" className="text-xs text-foreground">
+              Verify SSL/TLS Certificates
+            </label>
+          </div>
+          {!settings.verifySsl && (
+            <p className="text-[10px] text-amber-500">
+              ⚠ SSL verification is disabled. This is insecure and should only be used for local development.
+            </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function RequestBar() {
   const store = useGetmanStore();
   const tab = useActiveTab();
   if (!tab) return null;
 
+  const handleCancel = async () => {
+    if (store.activeRequestId) {
+      await cancelHttpRequest(store.activeRequestId);
+      setIsLoading(false);
+      setActiveRequestId(null);
+    }
+  };
+
   const sendRequest = async () => {
     if (!tab.url.trim()) return;
 
+    const requestId = uid();
     setIsLoading(true);
+    setActiveRequestId(requestId);
     setResponse(null);
+    setAssertionResults([]);
 
     try {
       const resolvedUrl = resolveEnvVariables(tab.url);
@@ -110,6 +242,8 @@ export function RequestBar() {
         headers[resolveEnvVariables(tab.authApiKey)] = resolveEnvVariables(
           tab.authApiValue
         );
+      } else if (tab.authType === "oauth2" && tab.oauth2AccessToken) {
+        headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.oauth2AccessToken)}`;
       }
 
       // Build body
@@ -155,13 +289,27 @@ export function RequestBar() {
         }
       }
 
+      const settings = tab.settings || defaultSettings();
+
       const data = await sendHttpRequest({
         url: url.toString(),
         method: tab.method,
         headers,
         body,
+        requestId,
+        timeoutMs: settings.timeoutMs > 0 ? settings.timeoutMs : undefined,
+        retryCount: settings.retryCount > 0 ? settings.retryCount : undefined,
+        retryDelayMs: settings.retryDelayMs,
+        proxyUrl: settings.proxyUrl || undefined,
+        verifySsl: settings.verifySsl,
       });
       setResponse(data);
+
+      // Run assertions
+      if (tab.assertions && tab.assertions.length > 0) {
+        const results = runAssertions(tab.assertions, data);
+        setAssertionResults(results);
+      }
 
       addHistoryItem({
         id: uid(),
@@ -183,6 +331,7 @@ export function RequestBar() {
       });
     } finally {
       setIsLoading(false);
+      setActiveRequestId(null);
     }
   };
 
@@ -247,21 +396,29 @@ export function RequestBar() {
         onPaste={handlePaste}
       />
 
+      <RequestSettingsDialog />
       <CodeGeneratorDialog />
 
-      <button
-        type="button"
-        onClick={sendRequest}
-        disabled={store.isLoading || !tab.url.trim()}
-        className="flex h-11 items-center gap-2 bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {store.isLoading ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
+      {store.isLoading ? (
+        <button
+          type="button"
+          onClick={handleCancel}
+          className="flex h-11 items-center gap-2 bg-destructive px-5 text-sm font-semibold text-destructive-foreground transition-colors hover:bg-destructive/90"
+        >
+          <X className="h-4 w-4" />
+          Cancel
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={sendRequest}
+          disabled={!tab.url.trim()}
+          className="flex h-11 items-center gap-2 bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
           <Send className="h-4 w-4" />
-        )}
-        Send
-      </button>
+          Send
+        </button>
+      )}
     </div>
   );
 }
