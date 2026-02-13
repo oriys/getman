@@ -15,6 +15,7 @@ import {
   type HttpMethod,
 } from "@/lib/getman-store";
 import { sendHttpRequest } from "@/lib/tauri";
+import { isCurlCommand, parseCurlCommand } from "@/lib/curl-parser";
 import {
   Select,
   SelectContent,
@@ -262,6 +263,31 @@ export function RequestBar() {
     }
   };
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (isCurlCommand(text)) {
+      e.preventDefault();
+      const parsed = parseCurlCommand(text);
+      updateActiveTab({
+        url: parsed.url,
+        method: parsed.method,
+        headers: parsed.headers,
+        params: parsed.params,
+        bodyType: parsed.bodyType,
+        bodyContent: parsed.bodyContent,
+        bodyFormData: parsed.bodyFormData,
+        cookies: parsed.cookies,
+        authType: parsed.authType,
+        authToken: parsed.authToken,
+        authUsername: parsed.authUsername,
+        authPassword: parsed.authPassword,
+        graphqlQuery: parsed.graphqlQuery,
+        graphqlVariables: parsed.graphqlVariables,
+        name: parsed.name,
+      });
+    }
+  };
+
   return (
     <div className="panel-inset flex items-center gap-0 overflow-hidden rounded-xl">
       <Select
@@ -290,6 +316,7 @@ export function RequestBar() {
         value={tab.url}
         onChange={(e) => updateActiveTab({ url: e.target.value })}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
       />
 
       <button
