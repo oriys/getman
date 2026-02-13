@@ -30,6 +30,7 @@ import {
   addEnvironment,
   deleteEnvironment,
   updateEnvironment,
+  updateGlobalVariables,
   createEmptyKV,
   type GetmanState,
 } from "@/lib/getman-store";
@@ -430,10 +431,11 @@ function HistoryView() {
 }
 
 function EnvironmentsView() {
-  const { environments, activeEnvironmentId } = useGetmanStore();
+  const { environments, activeEnvironmentId, globalVariables } = useGetmanStore();
   const [newEnvName, setNewEnvName] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [globalsExpanded, setGlobalsExpanded] = useState(false);
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -494,6 +496,86 @@ function EnvironmentsView() {
 
       <ScrollArea className="flex-1">
         <div className="py-1">
+          {/* Global Variables */}
+          <div>
+            <div
+              className="group flex items-center gap-2 px-3 py-2 hover:bg-[hsl(var(--surface-2))] cursor-pointer transition-colors bg-[hsl(var(--surface-2)/.5)]"
+            >
+              <button
+                type="button"
+                onClick={() => setGlobalsExpanded(!globalsExpanded)}
+                className="text-muted-foreground"
+              >
+                {globalsExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <Globe className="h-3.5 w-3.5 text-amber-500/70 shrink-0" />
+              <span className="text-xs text-foreground flex-1 truncate font-medium">
+                Globals
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                {globalVariables.filter((v) => v.key).length}
+              </span>
+            </div>
+
+            {globalsExpanded && (
+              <div className="pl-8 pr-3 py-2 space-y-1.5">
+                {globalVariables.map((v, i) => (
+                  <div key={v.id} className="flex items-center gap-2">
+                    <input
+                      className="flex-1 bg-[hsl(var(--surface-2))] border border-border/50 rounded text-[11px] font-mono text-foreground px-2 py-1 outline-none focus:border-primary/50"
+                      placeholder="KEY"
+                      value={v.key}
+                      onChange={(e) => {
+                        const vars = [...globalVariables];
+                        vars[i] = { ...v, key: e.target.value };
+                        updateGlobalVariables(vars);
+                      }}
+                    />
+                    <input
+                      className="flex-1 bg-[hsl(var(--surface-2))] border border-border/50 rounded text-[11px] font-mono text-foreground px-2 py-1 outline-none focus:border-primary/50"
+                      placeholder="value"
+                      value={v.value}
+                      onChange={(e) => {
+                        const vars = [...globalVariables];
+                        vars[i] = { ...v, value: e.target.value };
+                        updateGlobalVariables(vars);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateGlobalVariables(
+                          globalVariables.filter((_, idx) => idx !== i)
+                        );
+                      }}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateGlobalVariables([
+                      ...globalVariables,
+                      { ...createEmptyKV() },
+                    ]);
+                  }}
+                  className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add Variable
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Environment-specific variables */}
           {environments.map((env) => {
             const isActive = env.id === activeEnvironmentId;
             const isExpanded = expandedIds.has(env.id);
@@ -601,7 +683,7 @@ function EnvironmentsView() {
               </div>
             );
           })}
-          {environments.length === 0 && (
+          {environments.length === 0 && globalVariables.length === 0 && (
             <div className="px-4 py-8 text-center">
               <p className="text-xs text-muted-foreground">
                 No environments configured

@@ -28,9 +28,12 @@ export interface RequestTab {
   url: string;
   params: KeyValue[];
   headers: KeyValue[];
-  bodyType: "none" | "json" | "form-data" | "x-www-form-urlencoded" | "raw";
+  bodyType: "none" | "json" | "form-data" | "x-www-form-urlencoded" | "raw" | "graphql" | "binary";
   bodyContent: string;
   bodyFormData: KeyValue[];
+  graphqlQuery: string;
+  graphqlVariables: string;
+  cookies: KeyValue[];
   authType: "none" | "bearer" | "basic" | "api-key";
   authToken: string;
   authUsername: string;
@@ -95,6 +98,7 @@ export interface GetmanState {
   collections: Collection[];
   environments: Environment[];
   activeEnvironmentId: string | null;
+  globalVariables: EnvVariable[];
   sidebarView: "collections" | "history" | "environments";
   sidebarOpen: boolean;
 }
@@ -107,6 +111,7 @@ interface PersistedState {
   collections: Collection[];
   environments: Environment[];
   activeEnvironmentId: string | null;
+  globalVariables: EnvVariable[];
   sidebarView: GetmanState["sidebarView"];
   sidebarOpen: boolean;
 }
@@ -134,6 +139,9 @@ export function createDefaultTab(): RequestTab {
     bodyType: "none",
     bodyContent: "",
     bodyFormData: [createEmptyKV()],
+    graphqlQuery: "",
+    graphqlVariables: "{}",
+    cookies: [createEmptyKV()],
     authType: "none",
     authToken: "",
     authUsername: "",
@@ -161,6 +169,7 @@ function createInitialState(): GetmanState {
     collections: [],
     environments: [],
     activeEnvironmentId: null,
+    globalVariables: [],
     sidebarView: "collections",
     sidebarOpen: true,
   };
@@ -198,6 +207,9 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     environments: Array.isArray(parsed.environments) ? parsed.environments : [],
     activeEnvironmentId:
       typeof parsed.activeEnvironmentId === "string" ? parsed.activeEnvironmentId : null,
+    globalVariables: Array.isArray((parsed as Partial<GetmanState>).globalVariables)
+      ? (parsed as Partial<GetmanState>).globalVariables ?? []
+      : [],
     sidebarView,
     sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : true,
     response: null,
@@ -214,6 +226,7 @@ function serializeState(current: GetmanState): string {
     collections: current.collections,
     environments: current.environments,
     activeEnvironmentId: current.activeEnvironmentId,
+    globalVariables: current.globalVariables,
     sidebarView: current.sidebarView,
     sidebarOpen: current.sidebarOpen,
   };
@@ -443,17 +456,50 @@ export function updateEnvironment(id: string, partial: Partial<Environment>) {
   setState({ environments });
 }
 
+function resolveDynamicVariables(input: string): string {
+  return input
+    .replace(/\{\{\$timestamp\}\}/g, () => String(Date.now()))
+    .replace(/\{\{\$isoTimestamp\}\}/g, () => new Date().toISOString())
+    .replace(/\{\{\$uuid\}\}/g, () => {
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    })
+    .replace(/\{\{\$randomInt\}\}/g, () => String(Math.floor(Math.random() * 10000)));
+}
+
 export function resolveEnvVariables(input: string): string {
-  if (!state.activeEnvironmentId) return input;
-  const env = state.environments.find((e) => e.id === state.activeEnvironmentId);
-  if (!env) return input;
   let result = input;
-  for (const v of env.variables) {
+
+  // 1. Global variables (lowest priority)
+  for (const v of state.globalVariables) {
     if (v.enabled && v.key) {
       result = result.replace(new RegExp(`\\{\\{${v.key}\\}\\}`, "g"), v.value);
     }
   }
+
+  // 2. Environment variables (override globals)
+  if (state.activeEnvironmentId) {
+    const env = state.environments.find((e) => e.id === state.activeEnvironmentId);
+    if (env) {
+      for (const v of env.variables) {
+        if (v.enabled && v.key) {
+          result = result.replace(new RegExp(`\\{\\{${v.key}\\}\\}`, "g"), v.value);
+        }
+      }
+    }
+  }
+
+  // 3. Dynamic variables (always resolved last)
+  result = resolveDynamicVariables(result);
+
   return result;
+}
+
+export function updateGlobalVariables(variables: EnvVariable[]) {
+  setState({ globalVariables: variables });
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
