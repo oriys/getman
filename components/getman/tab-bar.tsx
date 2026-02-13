@@ -31,11 +31,17 @@ export function TabBar() {
                     : "border-transparent text-muted-foreground hover:border-border hover:bg-[hsl(var(--surface-1))] hover:text-foreground"
                 }`}
               >
-                <MethodBadge method={tab.method} size="sm" />
+                {(tab.requestType ?? "http") === "grpc" ? (
+                  <span className="font-mono font-bold text-purple-400 bg-purple-400/10 rounded px-1.5 text-[10px] py-0">
+                    gRPC
+                  </span>
+                ) : (
+                  <MethodBadge method={tab.method} size="sm" />
+                )}
                 <span className="truncate flex-1 text-left font-mono">
-                  {tab.url
-                    ? tab.url.replace(/^https?:\/\//, "").slice(0, 30)
-                    : tab.name}
+                  {(tab.requestType ?? "http") === "grpc"
+                    ? (tab.grpcMethodName || tab.url?.replace(/^https?:\/\//, "").slice(0, 30) || tab.name)
+                    : (tab.url ? tab.url.replace(/^https?:\/\//, "").slice(0, 30) : tab.name)}
                 </span>
                 <span
                   role="button"

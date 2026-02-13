@@ -8,6 +8,7 @@ import {
   useGetmanStore,
   updateActiveTab,
   setResponse,
+  setGrpcResponse,
   setIsLoading,
   setActiveRequestId,
   setAssertionResults,
@@ -16,9 +17,10 @@ import {
   uid,
   type HttpMethod,
   type RequestSettings,
+  type RequestType,
   defaultSettings,
 } from "@/lib/getman-store";
-import { sendHttpRequest, cancelHttpRequest } from "@/lib/tauri";
+import { sendHttpRequest, cancelHttpRequest, sendGrpcRequest, parseProtoContent } from "@/lib/tauri";
 import { runAssertions } from "@/lib/assertions";
 import { isCurlCommand, parseCurlCommand } from "@/lib/curl-parser";
 import { CodeGeneratorDialog } from "./code-generator-dialog";
@@ -171,9 +173,67 @@ export function RequestBar() {
   const tab = useActiveTab();
   if (!tab) return null;
 
+  const isGrpc = (tab.requestType ?? "http") === "grpc";
+
   const handleCancel = async () => {
     if (store.activeRequestId) {
       await cancelHttpRequest(store.activeRequestId);
+      setIsLoading(false);
+      setActiveRequestId(null);
+    }
+  };
+
+  const sendGrpc = async () => {
+    if (!tab.url.trim() || !tab.grpcServiceName || !tab.grpcMethodName) return;
+
+    const requestId = uid();
+    setIsLoading(true);
+    setActiveRequestId(requestId);
+    setResponse(null);
+    setGrpcResponse(null);
+
+    try {
+      const metadata: Record<string, string> = {};
+      for (const m of (tab.grpcMetadata ?? [])) {
+        if (m.enabled && m.key) {
+          metadata[m.key] = resolveEnvVariables(m.value);
+        }
+      }
+
+      const settings = tab.settings || defaultSettings();
+
+      const data = await sendGrpcRequest({
+        endpoint: resolveEnvVariables(tab.url),
+        protoContent: tab.grpcProtoContent,
+        serviceName: tab.grpcServiceName,
+        methodName: tab.grpcMethodName,
+        requestJson: resolveEnvVariables(tab.grpcRequestBody || "{}"),
+        metadata,
+        timeoutMs: settings.timeoutMs > 0 ? settings.timeoutMs : undefined,
+        requestId,
+      });
+
+      setGrpcResponse(data);
+
+      addHistoryItem({
+        id: uid(),
+        method: "POST",
+        url: `${tab.url}/${tab.grpcServiceName}/${tab.grpcMethodName}`,
+        status: data.statusCode === 0 ? 200 : 500,
+        time: data.time,
+        timestamp: Date.now(),
+        requestType: "grpc",
+      });
+    } catch {
+      setGrpcResponse({
+        statusCode: 2,
+        statusMessage: "Failed to send gRPC request",
+        responseJson: "",
+        responseMetadata: {},
+        time: 0,
+        size: 0,
+      });
+    } finally {
       setIsLoading(false);
       setActiveRequestId(null);
     }
@@ -335,14 +395,17 @@ export function RequestBar() {
     }
   };
 
+  const handleSend = isGrpc ? sendGrpc : sendRequest;
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      sendRequest();
+      handleSend();
     }
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (isGrpc) return;
     const text = e.clipboardData.getData("text");
     if (isCurlCommand(text)) {
       e.preventDefault();
@@ -365,60 +428,147 @@ export function RequestBar() {
     }
   };
 
+  const canSend = isGrpc
+    ? tab.url.trim() && tab.grpcServiceName && tab.grpcMethodName
+    : tab.url.trim();
+
+  const grpcServices = tab.grpcServices ?? [];
+  const selectedService = grpcServices.find((s) => s.fullName === tab.grpcServiceName);
+  const grpcMethods = selectedService?.methods ?? [];
+
   return (
-    <div className="panel-inset flex items-center gap-0 overflow-hidden rounded-xl">
-      <Select
-        value={tab.method}
-        onValueChange={(v) => updateActiveTab({ method: v as HttpMethod })}
-      >
-        <SelectTrigger className={`h-11 w-[118px] rounded-none border-0 border-r border-border/80 bg-transparent font-mono text-sm font-bold ${methodTextColors[tab.method]} focus:ring-0 focus:ring-offset-0`}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
-          {methods.map((m) => (
-            <SelectItem
-              key={m}
-              value={m}
-              className={`font-mono font-bold ${methodTextColors[m]}`}
+    <div className="flex flex-col gap-2">
+      {/* Protocol toggle */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center rounded-lg border border-border/60 overflow-hidden">
+          {(["http", "grpc"] as RequestType[]).map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => updateActiveTab({ requestType: type })}
+              className={`px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                (tab.requestType ?? "http") === type
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
             >
-              {m}
-            </SelectItem>
+              {type}
+            </button>
           ))}
-        </SelectContent>
-      </Select>
+        </div>
 
-      <input
-        className="h-11 flex-1 bg-transparent px-3 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
-        placeholder="Enter request URL or paste cURL..."
-        value={tab.url}
-        onChange={(e) => updateActiveTab({ url: e.target.value })}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-      />
+        {/* gRPC service/method selectors */}
+        {isGrpc && grpcServices.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <Select
+              value={tab.grpcServiceName || ""}
+              onValueChange={(v) => {
+                const svc = grpcServices.find((s) => s.fullName === v);
+                updateActiveTab({
+                  grpcServiceName: v,
+                  grpcMethodName: svc?.methods[0]?.name ?? "",
+                });
+              }}
+            >
+              <SelectTrigger className="h-8 w-auto min-w-[140px] rounded-md border-border/60 bg-transparent font-mono text-[11px] text-foreground focus:ring-0 focus:ring-offset-0">
+                <SelectValue placeholder="Service" />
+              </SelectTrigger>
+              <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
+                {grpcServices.map((s) => (
+                  <SelectItem key={s.fullName} value={s.fullName} className="font-mono text-xs">
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-muted-foreground text-xs">/</span>
+            <Select
+              value={tab.grpcMethodName || ""}
+              onValueChange={(v) => updateActiveTab({ grpcMethodName: v })}
+            >
+              <SelectTrigger className="h-8 w-auto min-w-[140px] rounded-md border-border/60 bg-transparent font-mono text-[11px] text-foreground focus:ring-0 focus:ring-offset-0">
+                <SelectValue placeholder="Method" />
+              </SelectTrigger>
+              <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
+                {grpcMethods.map((m) => (
+                  <SelectItem key={m.name} value={m.name} className="font-mono text-xs">
+                    {m.name}
+                    {(m.clientStreaming || m.serverStreaming) && (
+                      <span className="ml-1 text-[9px] text-muted-foreground">
+                        {m.clientStreaming && m.serverStreaming ? "bidi" : m.serverStreaming ? "server-stream" : "client-stream"}
+                      </span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </div>
 
-      <RequestSettingsDialog />
-      <CodeGeneratorDialog />
+      {/* URL bar */}
+      <div className="panel-inset flex items-center gap-0 overflow-hidden rounded-xl">
+        {!isGrpc && (
+          <Select
+            value={tab.method}
+            onValueChange={(v) => updateActiveTab({ method: v as HttpMethod })}
+          >
+            <SelectTrigger className={`h-11 w-[118px] rounded-none border-0 border-r border-border/80 bg-transparent font-mono text-sm font-bold ${methodTextColors[tab.method]} focus:ring-0 focus:ring-offset-0`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
+              {methods.map((m) => (
+                <SelectItem
+                  key={m}
+                  value={m}
+                  className={`font-mono font-bold ${methodTextColors[m]}`}
+                >
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
-      {store.isLoading ? (
-        <button
-          type="button"
-          onClick={handleCancel}
-          className="flex h-11 items-center gap-2 bg-destructive px-5 text-sm font-semibold text-destructive-foreground transition-colors hover:bg-destructive/90"
-        >
-          <X className="h-4 w-4" />
-          Cancel
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={sendRequest}
-          disabled={!tab.url.trim()}
-          className="flex h-11 items-center gap-2 bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Send className="h-4 w-4" />
-          Send
-        </button>
-      )}
+        {isGrpc && (
+          <div className="flex h-11 items-center px-3 border-r border-border/80">
+            <span className="font-mono text-sm font-bold text-purple-400">gRPC</span>
+          </div>
+        )}
+
+        <input
+          className="h-11 flex-1 bg-transparent px-3 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
+          placeholder={isGrpc ? "Enter gRPC server address (e.g., http://localhost:50051)" : "Enter request URL or paste cURL..."}
+          value={tab.url}
+          onChange={(e) => updateActiveTab({ url: e.target.value })}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+        />
+
+        {!isGrpc && <RequestSettingsDialog />}
+        {!isGrpc && <CodeGeneratorDialog />}
+
+        {store.isLoading ? (
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="flex h-11 items-center gap-2 bg-destructive px-5 text-sm font-semibold text-destructive-foreground transition-colors hover:bg-destructive/90"
+          >
+            <X className="h-4 w-4" />
+            Cancel
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!canSend}
+            className="flex h-11 items-center gap-2 bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Send className="h-4 w-4" />
+            Send
+          </button>
+        )}
+      </div>
     </div>
   );
 }

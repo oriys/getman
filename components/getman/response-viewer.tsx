@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { Copy, Check, Search, X, Download, AlertTriangle } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useGetmanStore, type ResponseData } from "@/lib/getman-store";
+import { useGetmanStore, type ResponseData, type GrpcResponseData } from "@/lib/getman-store";
 
 function StatusBadge({ status }: { status: number }) {
   let color = "text-muted-foreground bg-muted";
@@ -446,8 +446,97 @@ function ResponseCookies({ headers }: { headers: Record<string, string> }) {
   );
 }
 
+// ─── gRPC Status Codes ───────────────────────────────────────────────────────
+
+const grpcStatusNames: Record<number, string> = {
+  0: "OK",
+  1: "CANCELLED",
+  2: "UNKNOWN",
+  3: "INVALID_ARGUMENT",
+  4: "DEADLINE_EXCEEDED",
+  5: "NOT_FOUND",
+  6: "ALREADY_EXISTS",
+  7: "PERMISSION_DENIED",
+  8: "RESOURCE_EXHAUSTED",
+  9: "FAILED_PRECONDITION",
+  10: "ABORTED",
+  11: "OUT_OF_RANGE",
+  12: "UNIMPLEMENTED",
+  13: "INTERNAL",
+  14: "UNAVAILABLE",
+  15: "DATA_LOSS",
+  16: "UNAUTHENTICATED",
+};
+
+function GrpcStatusBadge({ code }: { code: number }) {
+  const color = code === 0
+    ? "text-[hsl(var(--method-get))] bg-[hsl(var(--method-get)/.12)]"
+    : "text-[hsl(var(--method-delete))] bg-[hsl(var(--method-delete)/.12)]";
+
+  return (
+    <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${color}`}>
+      {grpcStatusNames[code] ?? `CODE_${code}`}
+    </span>
+  );
+}
+
+function GrpcResponseView({ grpcResponse }: { grpcResponse: GrpcResponseData }) {
+  const hasResponse = grpcResponse.responseJson.length > 0;
+
+  return (
+    <div className="flex h-full flex-col bg-[hsl(var(--surface-1))]">
+      {/* Status bar */}
+      <div className="flex shrink-0 items-center gap-3 border-b border-border/70 px-4 py-2.5">
+        <GrpcStatusBadge code={grpcResponse.statusCode} />
+        <span className="text-xs text-muted-foreground">{grpcResponse.statusMessage}</span>
+        <div className="flex-1" />
+        <span className="text-[11px] text-muted-foreground font-mono">
+          {grpcResponse.time}ms
+        </span>
+        <span className="text-[11px] text-muted-foreground font-mono">
+          {formatBytes(grpcResponse.size)}
+        </span>
+        {hasResponse && <CopyButton text={grpcResponse.responseJson} />}
+      </div>
+
+      {/* Tabs */}
+      <Tabs defaultValue="body" className="flex flex-col flex-1 min-h-0">
+        <TabsList className="h-auto flex-1 gap-0 rounded-none bg-transparent p-0 border-b border-border/70">
+          <TabsTrigger
+            value="body"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground text-muted-foreground text-xs px-4 py-2 font-medium"
+          >
+            Response
+          </TabsTrigger>
+          <TabsTrigger
+            value="metadata"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground text-muted-foreground text-xs px-4 py-2 font-medium"
+          >
+            Metadata
+            <span className="ml-1.5 text-[10px] text-muted-foreground">
+              ({Object.keys(grpcResponse.responseMetadata).length})
+            </span>
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="body" className="m-0 min-h-0 flex-1 overflow-auto p-4">
+          {hasResponse ? (
+            <SyntaxHighlightedJSON json={grpcResponse.responseJson} />
+          ) : (
+            <p className="text-muted-foreground text-sm">No response body</p>
+          )}
+        </TabsContent>
+
+        <TabsContent value="metadata" className="m-0 flex-1 overflow-auto min-h-0">
+          <ResponseHeaders headers={grpcResponse.responseMetadata} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
 export function ResponseViewer() {
-  const { response, isLoading, assertionResults } = useGetmanStore();
+  const { response, grpcResponse, isLoading, assertionResults } = useGetmanStore();
   const [viewMode, setViewMode] = useState<"pretty" | "raw">("pretty");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -488,7 +577,7 @@ export function ResponseViewer() {
     );
   }
 
-  if (!response) {
+  if (!response && !grpcResponse) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
         <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-border bg-[hsl(var(--surface-2))]">
@@ -500,6 +589,14 @@ export function ResponseViewer() {
         </div>
       </div>
     );
+  }
+
+  if (grpcResponse) {
+    return <GrpcResponseView grpcResponse={grpcResponse} />;
+  }
+
+  if (!response) {
+    return null;
   }
 
   return (
