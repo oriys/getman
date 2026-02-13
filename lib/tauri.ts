@@ -23,6 +23,51 @@ export interface HttpResponseData {
   contentType: string;
 }
 
+// ─── gRPC Types ──────────────────────────────────────────────────────────────
+
+export interface GrpcRequestPayload {
+  endpoint: string;
+  protoContent: string;
+  serviceName: string;
+  methodName: string;
+  requestJson: string;
+  metadata: Record<string, string>;
+  timeoutMs?: number;
+  requestId?: string;
+}
+
+export interface GrpcResponseData {
+  statusCode: number;
+  statusMessage: string;
+  responseJson: string;
+  responseMetadata: Record<string, string>;
+  time: number;
+  size: number;
+}
+
+export interface ProtoServiceInfo {
+  name: string;
+  fullName: string;
+  methods: ProtoMethodInfo[];
+}
+
+export interface ProtoMethodInfo {
+  name: string;
+  fullName: string;
+  inputType: string;
+  outputType: string;
+  clientStreaming: boolean;
+  serverStreaming: boolean;
+  inputFields: ProtoFieldInfo[];
+}
+
+export interface ProtoFieldInfo {
+  name: string;
+  number: number;
+  typeName: string;
+  isRepeated: boolean;
+}
+
 const LOCAL_STATE_KEY = "getman.state.v1";
 
 function isBodyAllowed(method: string): boolean {
@@ -196,4 +241,53 @@ export async function savePersistedState(stateJson: string): Promise<void> {
   }
 
   window.localStorage.setItem(LOCAL_STATE_KEY, stateJson);
+}
+
+// ─── gRPC Functions ──────────────────────────────────────────────────────────
+
+export async function parseProtoContent(
+  protoContent: string
+): Promise<ProtoServiceInfo[]> {
+  if (isTauriRuntime()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<ProtoServiceInfo[]>("parse_proto_content", {
+        protoContent,
+      });
+    } catch (error) {
+      throw error instanceof Error ? error : new Error("Failed to parse proto");
+    }
+  }
+
+  throw new Error("gRPC is only supported in the desktop app");
+}
+
+export async function sendGrpcRequest(
+  payload: GrpcRequestPayload
+): Promise<GrpcResponseData> {
+  if (isTauriRuntime()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<GrpcResponseData>("send_grpc_request", { payload });
+    } catch (error) {
+      return {
+        statusCode: 2,
+        statusMessage:
+          error instanceof Error ? error.message : "Unknown gRPC error",
+        responseJson: "",
+        responseMetadata: {},
+        time: 0,
+        size: 0,
+      };
+    }
+  }
+
+  return {
+    statusCode: 2,
+    statusMessage: "gRPC is only supported in the desktop app",
+    responseJson: "",
+    responseMetadata: {},
+    time: 0,
+    size: 0,
+  };
 }

@@ -14,6 +14,8 @@ export type HttpMethod =
   | "HEAD"
   | "OPTIONS";
 
+export type RequestType = "http" | "grpc";
+
 export interface KeyValue {
   id: string;
   key: string;
@@ -64,9 +66,35 @@ export interface CollectionFolder {
 
 export type OAuth2GrantType = "authorization_code" | "client_credentials";
 
+// ─── gRPC Proto Types ─────────────────────────────────────────────────────────
+
+export interface ProtoFieldInfo {
+  name: string;
+  number: number;
+  typeName: string;
+  isRepeated: boolean;
+}
+
+export interface ProtoMethodInfo {
+  name: string;
+  fullName: string;
+  inputType: string;
+  outputType: string;
+  clientStreaming: boolean;
+  serverStreaming: boolean;
+  inputFields: ProtoFieldInfo[];
+}
+
+export interface ProtoServiceInfo {
+  name: string;
+  fullName: string;
+  methods: ProtoMethodInfo[];
+}
+
 export interface RequestTab {
   id: string;
   name: string;
+  requestType: RequestType;
   method: HttpMethod;
   url: string;
   params: KeyValue[];
@@ -100,6 +128,13 @@ export interface RequestTab {
   // Scripts
   preRequestScript: string;
   testScript: string;
+  // gRPC fields
+  grpcProtoContent: string;
+  grpcServiceName: string;
+  grpcMethodName: string;
+  grpcRequestBody: string;
+  grpcMetadata: KeyValue[];
+  grpcServices: ProtoServiceInfo[];
 }
 
 export interface ResponseData {
@@ -112,6 +147,15 @@ export interface ResponseData {
   contentType: string;
 }
 
+export interface GrpcResponseData {
+  statusCode: number;
+  statusMessage: string;
+  responseJson: string;
+  responseMetadata: Record<string, string>;
+  time: number;
+  size: number;
+}
+
 export interface HistoryItem {
   id: string;
   method: HttpMethod;
@@ -119,6 +163,7 @@ export interface HistoryItem {
   status: number;
   time: number;
   timestamp: number;
+  requestType?: RequestType;
 }
 
 export interface Collection {
@@ -283,6 +328,7 @@ export interface GetmanState {
   tabs: RequestTab[];
   activeTabId: string;
   response: ResponseData | null;
+  grpcResponse: GrpcResponseData | null;
   isLoading: boolean;
   activeRequestId: string | null;
   history: HistoryItem[];
@@ -357,6 +403,7 @@ export function createDefaultTab(): RequestTab {
   return {
     id: uid(),
     name: "New Request",
+    requestType: "http",
     method: "GET",
     url: "",
     params: [createEmptyKV()],
@@ -386,6 +433,12 @@ export function createDefaultTab(): RequestTab {
     assertions: [],
     preRequestScript: "",
     testScript: "",
+    grpcProtoContent: "",
+    grpcServiceName: "",
+    grpcMethodName: "",
+    grpcRequestBody: "{}",
+    grpcMetadata: [createEmptyKV()],
+    grpcServices: [],
   };
 }
 
@@ -404,6 +457,7 @@ function createInitialState(): GetmanState {
     tabs: [defaultTab],
     activeTabId: defaultTab.id,
     response: null,
+    grpcResponse: null,
     isLoading: false,
     activeRequestId: null,
     history: [],
@@ -478,6 +532,7 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     sidebarView,
     sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : true,
     response: null,
+    grpcResponse: null,
     isLoading: false,
     activeRequestId: null,
     assertionResults: [],
@@ -604,7 +659,7 @@ export function updateActiveTab(partial: Partial<RequestTab>) {
 }
 
 export function setActiveTabId(id: string) {
-  setState({ activeTabId: id, response: null });
+  setState({ activeTabId: id, response: null, grpcResponse: null });
 }
 
 export function addTab() {
@@ -613,6 +668,7 @@ export function addTab() {
     tabs: [...state.tabs, tab],
     activeTabId: tab.id,
     response: null,
+    grpcResponse: null,
   });
 }
 
@@ -623,7 +679,7 @@ export function duplicateTab(id: string) {
   const idx = state.tabs.findIndex((t) => t.id === id);
   const tabs = [...state.tabs];
   tabs.splice(idx + 1, 0, newTab);
-  setState({ tabs, activeTabId: newTab.id, response: null });
+  setState({ tabs, activeTabId: newTab.id, response: null, grpcResponse: null });
 }
 
 export function closeTab(id: string) {
@@ -639,6 +695,10 @@ export function closeTab(id: string) {
 
 export function setResponse(response: ResponseData | null) {
   setState({ response }, { persist: false });
+}
+
+export function setGrpcResponse(grpcResponse: GrpcResponseData | null) {
+  setState({ grpcResponse }, { persist: false });
 }
 
 export function setIsLoading(isLoading: boolean) {
