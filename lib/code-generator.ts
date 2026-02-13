@@ -322,7 +322,7 @@ function generateGoNative(req: ResolvedRequest): string {
   lines.push(`\t}`);
 
   for (const [key, value] of Object.entries(req.headers)) {
-    const escaped = value.replace(/"/g, '\\"');
+    const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     lines.push(`\treq.Header.Set("${key}", "${escaped}")`);
   }
 
