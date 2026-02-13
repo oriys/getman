@@ -9,16 +9,19 @@
  */
 
 import type {
-  Collection,
-  SavedRequest,
-  Environment,
   ExportFormat,
   ImportOptions,
   ExportOptions,
   DocumentationConfig,
   GeneratedDocumentation
 } from './capability-types';
-import type { CollectionFolder } from './getman-store';
+import type { 
+  Collection,
+  CollectionFolder, 
+  RequestTab,
+  SavedRequest,
+  Environment 
+} from './getman-store';
 
 /**
  * Export collection to Postman v2.1 format
@@ -296,35 +299,24 @@ export function importFromPostmanV21(
         ? item.request.url 
         : item.request.url?.raw || '';
       
-      const request: SavedRequest = {
-        id: crypto.randomUUID(),
-        name: item.name,
-        description: item.request.description || '',
-        method: item.request.method,
-        url,
-        config: {} as any, // Simplified for now
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      } as any;
-      
-      // Build request tab
-      const tab: any = {
+      // Build request tab structure (matches getman-store.ts SavedRequest)
+      const tab: RequestTab = {
         id: crypto.randomUUID(),
         name: item.name,
         method: item.request.method,
         url,
         params: [],
         headers: [],
-        bodyType: 'none',
+        bodyType: 'none' as const,
         bodyContent: '',
         bodyFormData: [],
-        authType: 'none',
+        authType: 'none' as const,
         authToken: '',
         authUsername: '',
         authPassword: '',
         authApiKey: '',
         authApiValue: '',
-        authApiAddTo: 'header'
+        authApiAddTo: 'header' as const
       };
       
       // Import headers
@@ -373,6 +365,15 @@ export function importFromPostmanV21(
       }
       
       // Import scripts
+      const request: SavedRequest = {
+        id: crypto.randomUUID(),
+        name: item.name,
+        description: item.request.description || '',
+        method: item.request.method,
+        url,
+        tab
+      };
+      
       if (item.event) {
         item.event.forEach((event: any) => {
           if (event.listen === 'prerequest' && event.script?.exec) {
@@ -384,7 +385,7 @@ export function importFromPostmanV21(
                 : event.script.exec,
               enabled: true,
               language: 'javascript'
-            };
+            } as any;
           } else if (event.listen === 'test' && event.script?.exec) {
             request.testScript = {
               id: crypto.randomUUID(),
@@ -394,12 +395,11 @@ export function importFromPostmanV21(
                 : event.script.exec,
               enabled: true,
               language: 'javascript'
-            };
+            } as any;
           }
         });
       }
       
-      request.tab = tab;
       return request;
     }
     

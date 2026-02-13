@@ -316,11 +316,19 @@ function buildHeadersObject(headers: KeyValue[]): Record<string, string> {
 
 /**
  * Execute script code in a controlled environment
+ * 
+ * SECURITY WARNING: This uses Function constructor which is not secure.
+ * In production, this MUST be replaced with a proper sandboxed environment
+ * such as QuickJS, Deno core, or isolated-vm.
+ * 
+ * Current implementation is for demonstration purposes only.
  */
 async function executeScript(code: string, context: ScriptContext): Promise<void> {
-  // Create a function with the script code
-  // In a real implementation, this would use a proper sandboxed environment
-  // For now, we'll use a simple approach
+  // TODO: Replace with proper sandboxed execution
+  // Options:
+  // 1. QuickJS (lightweight JavaScript engine)
+  // 2. Deno core (V8 isolate with limited APIs)
+  // 3. isolated-vm (V8 isolates in Node.js)
   
   const pm = context;
   

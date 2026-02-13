@@ -103,26 +103,26 @@ export function resolveVariables(
   
   // Global variables (lowest priority)
   if (scopes.global) {
-    Object.entries(scopes.global).forEach(([k, v]) => variables.set(k, v));
+    Object.entries(scopes.global).forEach(([key, value]) => variables.set(key, value));
   }
   
   // Collection variables
   if (scopes.collection?.variables) {
     scopes.collection.variables
-      .filter(v => v.enabled && v.key)
-      .forEach(v => variables.set(v.key, v.value));
+      .filter(variable => variable.enabled && variable.key)
+      .forEach(variable => variables.set(variable.key, variable.value));
   }
   
   // Environment variables
   if (scopes.environment?.variables) {
     scopes.environment.variables
-      .filter(v => v.enabled && v.key)
-      .forEach(v => variables.set(v.key, v.value));
+      .filter(variable => variable.enabled && variable.key)
+      .forEach(variable => variables.set(variable.key, variable.value));
   }
   
   // Local variables (highest priority)
   if (scopes.local) {
-    Object.entries(scopes.local).forEach(([k, v]) => variables.set(k, v));
+    Object.entries(scopes.local).forEach(([key, value]) => variables.set(key, value));
   }
   
   // Replace all variables

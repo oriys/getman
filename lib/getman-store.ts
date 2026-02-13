@@ -25,6 +25,7 @@ export interface KeyValue {
 export interface Script {
   id: string;
   type: "pre-request" | "test";
+  name?: string;
   code: string;
   enabled: boolean;
 }
@@ -97,6 +98,7 @@ export interface Collection {
   id: string;
   name: string;
   description?: string;
+  version?: string;
   requests: SavedRequest[];
   folders: CollectionFolder[];
   
