@@ -465,7 +465,9 @@ impl Decoder for RawBytesDecoder {
 }
 
 fn compile_proto(proto_content: &str) -> Result<DescriptorPool, String> {
-    let temp_dir = std::env::temp_dir().join("getman-proto");
+    // Use a unique subdirectory per invocation to avoid race conditions
+    let unique_id = format!("{}-{}", std::process::id(), Instant::now().elapsed().as_nanos());
+    let temp_dir = std::env::temp_dir().join(format!("getman-proto-{unique_id}"));
     fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp directory: {e}"))?;
 
@@ -479,7 +481,8 @@ fn compile_proto(proto_content: &str) -> Result<DescriptorPool, String> {
     let pool = DescriptorPool::decode(fds.encode_to_vec().as_ref())
         .map_err(|e| format!("Failed to create descriptor pool: {e}"))?;
 
-    let _ = fs::remove_file(&proto_path);
+    // Clean up temp directory
+    let _ = fs::remove_dir_all(&temp_dir);
 
     Ok(pool)
 }
