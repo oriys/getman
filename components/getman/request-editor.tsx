@@ -17,7 +17,7 @@ function GrpcProtoEditor() {
   if (!tab) return null;
 
   const handleParseProto = async () => {
-    if (!tab.grpcProtoContent.trim()) return;
+    if (!tab.grpcProtoContent?.trim()) return;
 
     setParsing(true);
     setParseError(null);
@@ -48,7 +48,7 @@ function GrpcProtoEditor() {
         <button
           type="button"
           onClick={handleParseProto}
-          disabled={!tab.grpcProtoContent.trim() || parsing}
+          disabled={!tab.grpcProtoContent?.trim() || parsing}
           className="text-[11px] font-medium bg-primary/10 text-primary hover:bg-primary/20 px-3 py-1 rounded transition-colors disabled:opacity-50"
         >
           {parsing ? "Parsing..." : "Parse Proto"}
@@ -68,7 +68,7 @@ function GrpcProtoEditor() {
       <textarea
         className="flex-1 w-full bg-transparent px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40 resize-none"
         placeholder={`syntax = "proto3";\n\npackage helloworld;\n\nservice Greeter {\n  rpc SayHello (HelloRequest) returns (HelloReply);\n}\n\nmessage HelloRequest {\n  string name = 1;\n}\n\nmessage HelloReply {\n  string message = 1;\n}`}
-        value={tab.grpcProtoContent}
+        value={tab.grpcProtoContent ?? ""}
         onChange={(e) => updateActiveTab({ grpcProtoContent: e.target.value })}
         spellCheck={false}
       />
