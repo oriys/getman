@@ -99,7 +99,7 @@ export function CodeGeneratorDialog() {
             </button>
           </div>
           <div className="max-h-[400px] overflow-auto rounded-lg border border-border bg-[hsl(var(--surface-2))] p-4">
-            <pre className="font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all">
+            <pre className="font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-words">
               {code}
             </pre>
           </div>

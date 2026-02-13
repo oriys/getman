@@ -179,7 +179,7 @@ function generateJavaScriptFetch(req: ResolvedRequest): string {
     });
     lines.push(`  })`);
   } else if (req.body) {
-    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n");
+    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
     lines.push(`  body: '${escaped}'`);
   }
 
@@ -223,7 +223,7 @@ function generateNodeAxios(req: ResolvedRequest): string {
   if (req.formFields.length > 0) {
     lines.push(`  data: params`);
   } else if (req.body) {
-    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n");
+    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
     lines.push(`  data: '${escaped}'`);
   }
 
@@ -261,7 +261,7 @@ function generatePythonRequests(req: ResolvedRequest): string {
     });
     lines.push(`}`);
   } else if (req.body) {
-    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n");
+    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
     lines.push(`data = '${escaped}'`);
   }
 
@@ -310,7 +310,7 @@ function generateGoNative(req: ResolvedRequest): string {
     lines.push(``);
     lines.push(`\treq, err := http.NewRequest("${req.method}", "${req.url}", strings.NewReader(data.Encode()))`);
   } else if (req.body) {
-    const escaped = req.body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+    const escaped = req.body.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
     lines.push(`\tbody := strings.NewReader("${escaped}")`);
     lines.push(`\treq, err := http.NewRequest("${req.method}", "${req.url}", body)`);
   } else {
@@ -371,7 +371,7 @@ function generatePhpCurl(req: ResolvedRequest): string {
     });
     lines.push(`]));`);
   } else if (req.body) {
-    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n");
+    const escaped = req.body.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
     lines.push(`curl_setopt($ch, CURLOPT_POSTFIELDS, '${escaped}');`);
   }
 
