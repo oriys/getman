@@ -1,12 +1,49 @@
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use reqwest::{Client, Method};
+use reqwest::{Client, Method, Proxy};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Instant;
-use tauri::{AppHandle, Manager};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager, State};
+use tokio::sync::broadcast;
+
+// ─── Cancel Token Registry ──────────────────────────────────────────────────
+
+struct CancelRegistry {
+    senders: Mutex<HashMap<String, broadcast::Sender<()>>>,
+}
+
+impl CancelRegistry {
+    fn new() -> Self {
+        Self {
+            senders: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn register(&self, id: &str) -> broadcast::Receiver<()> {
+        let (tx, rx) = broadcast::channel(1);
+        self.senders
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), tx);
+        rx
+    }
+
+    fn cancel(&self, id: &str) -> bool {
+        if let Some(tx) = self.senders.lock().unwrap().remove(id) {
+            let _ = tx.send(());
+            return true;
+        }
+        false
+    }
+
+    fn remove(&self, id: &str) {
+        self.senders.lock().unwrap().remove(id);
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +52,22 @@ struct SendRequestPayload {
     method: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    retry_count: Option<u32>,
+    #[serde(default)]
+    retry_delay_ms: Option<u64>,
+    #[serde(default)]
+    proxy_url: Option<String>,
+    #[serde(default = "default_verify_ssl")]
+    verify_ssl: bool,
+}
+
+fn default_verify_ssl() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
@@ -63,68 +116,129 @@ fn build_headers(input: &HashMap<String, String>) -> Result<HeaderMap, String> {
 
 async fn send_http_request_impl(
     payload: SendRequestPayload,
+    cancel_rx: &mut broadcast::Receiver<()>,
 ) -> Result<SendResponsePayload, String> {
     let method = Method::from_bytes(payload.method.as_bytes())
         .map_err(|err| format!("Invalid HTTP method: {err}"))?;
 
     let headers = build_headers(&payload.headers)?;
 
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|err| format!("Failed to build HTTP client: {err}"))?;
+    let mut builder = Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10));
 
-    let mut request = client
-        .request(method.clone(), &payload.url)
-        .headers(headers);
-
-    if payload.body.is_some() && !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
-        if let Some(body) = payload.body {
-            request = request.body(body);
+    // Timeout
+    if let Some(ms) = payload.timeout_ms {
+        if ms > 0 {
+            builder = builder.timeout(Duration::from_millis(ms));
         }
     }
 
-    let start = Instant::now();
-    let response = request
-        .send()
-        .await
-        .map_err(|err| format!("Request failed: {err}"))?;
-    let elapsed = start.elapsed().as_millis() as u64;
-
-    let status = response.status();
-    let status_text = status.canonical_reason().unwrap_or("Unknown").to_string();
-
-    let mut response_headers = HashMap::new();
-    for (key, value) in response.headers() {
-        response_headers.insert(
-            key.to_string(),
-            value.to_str().unwrap_or_default().to_string(),
-        );
+    // Proxy
+    if let Some(ref proxy_url) = payload.proxy_url {
+        if !proxy_url.is_empty() {
+            let proxy = Proxy::all(proxy_url)
+                .map_err(|err| format!("Invalid proxy URL: {err}"))?;
+            builder = builder.proxy(proxy);
+        }
     }
 
-    let content_type = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("text/plain")
-        .to_string();
+    // SSL verification
+    if !payload.verify_ssl {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| format!("Failed to read response: {err}"))?;
+    let client = builder
+        .build()
+        .map_err(|err| format!("Failed to build HTTP client: {err}"))?;
 
-    let body = String::from_utf8_lossy(&bytes).to_string();
+    let max_retries = payload.retry_count.unwrap_or(0);
+    let retry_delay = payload.retry_delay_ms.unwrap_or(1000);
 
-    Ok(SendResponsePayload {
-        status: status.as_u16(),
-        status_text,
-        headers: response_headers,
-        body,
-        time: elapsed,
-        size: bytes.len() as u64,
-        content_type,
-    })
+    let mut last_error: Option<String> = None;
+
+    for attempt in 0..=max_retries {
+        if attempt > 0 {
+            // Check cancellation before retry delay
+            let delay = tokio::time::sleep(Duration::from_millis(retry_delay));
+            tokio::select! {
+                _ = delay => {},
+                _ = cancel_rx.recv() => {
+                    return Err("Request cancelled".into());
+                }
+            }
+        }
+
+        let mut request = client
+            .request(method.clone(), &payload.url)
+            .headers(headers.clone());
+
+        if payload.body.is_some()
+            && !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS)
+        {
+            if let Some(ref body) = payload.body {
+                request = request.body(body.clone());
+            }
+        }
+
+        let start = Instant::now();
+
+        let result = tokio::select! {
+            res = request.send() => res,
+            _ = cancel_rx.recv() => {
+                return Err("Request cancelled".into());
+            }
+        };
+
+        match result {
+            Ok(response) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                let status = response.status();
+                let status_text =
+                    status.canonical_reason().unwrap_or("Unknown").to_string();
+
+                let mut response_headers = HashMap::new();
+                for (key, value) in response.headers() {
+                    response_headers.insert(
+                        key.to_string(),
+                        value.to_str().unwrap_or_default().to_string(),
+                    );
+                }
+
+                let content_type = response
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("text/plain")
+                    .to_string();
+
+                let bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|err| format!("Failed to read response: {err}"))?;
+
+                let body = String::from_utf8_lossy(&bytes).to_string();
+
+                return Ok(SendResponsePayload {
+                    status: status.as_u16(),
+                    status_text,
+                    headers: response_headers,
+                    body,
+                    time: elapsed,
+                    size: bytes.len() as u64,
+                    content_type,
+                });
+            }
+            Err(err) => {
+                last_error = Some(format!("Request failed: {err}"));
+                // Retry on connection errors or timeouts
+                if attempt < max_retries {
+                    continue;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "Request failed".into()))
 }
 
 fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -180,11 +294,29 @@ fn upsert_state(conn: &Connection, state_json: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn send_http_request(payload: SendRequestPayload) -> SendResponsePayload {
-    match send_http_request_impl(payload).await {
-        Ok(response) => response,
-        Err(message) => error_response(message),
+async fn send_http_request(
+    payload: SendRequestPayload,
+    registry: State<'_, CancelRegistry>,
+) -> Result<SendResponsePayload, String> {
+    let request_id = payload.request_id.clone().unwrap_or_default();
+    let mut cancel_rx = registry.register(&request_id);
+
+    let result = send_http_request_impl(payload, &mut cancel_rx).await;
+
+    registry.remove(&request_id);
+
+    match result {
+        Ok(response) => Ok(response),
+        Err(message) => Ok(error_response(message)),
     }
+}
+
+#[tauri::command]
+fn cancel_http_request(
+    request_id: String,
+    registry: State<'_, CancelRegistry>,
+) -> bool {
+    registry.cancel(&request_id)
 }
 
 #[tauri::command]
@@ -226,8 +358,10 @@ fn save_app_state(app: AppHandle, state_json: String) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
+        .manage(CancelRegistry::new())
         .invoke_handler(tauri::generate_handler![
             send_http_request,
+            cancel_http_request,
             load_app_state,
             save_app_state
         ])

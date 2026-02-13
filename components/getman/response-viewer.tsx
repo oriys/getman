@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Copy, Check, Search, X } from "lucide-react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { Copy, Check, Search, X, Download, AlertTriangle } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGetmanStore, type ResponseData } from "@/lib/getman-store";
 
@@ -177,7 +177,90 @@ function HighlightedText({ text, search }: { text: string; search: string }) {
   );
 }
 
+// ─── Large Response Virtual Rendering ────────────────────────────────────────
+
+const LARGE_RESPONSE_THRESHOLD_BYTES = 500_000; // 500KB
+const VIRTUAL_LINE_HEIGHT = 18;
+const VIRTUAL_OVERSCAN = 20;
+
+function VirtualizedText({ text }: { text: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(600);
+
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const totalHeight = lines.length * VIRTUAL_LINE_HEIGHT;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerHeight(entry.contentRect.height);
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  const startIdx = Math.max(0, Math.floor(scrollTop / VIRTUAL_LINE_HEIGHT) - VIRTUAL_OVERSCAN);
+  const endIdx = Math.min(
+    lines.length,
+    Math.ceil((scrollTop + containerHeight) / VIRTUAL_LINE_HEIGHT) + VIRTUAL_OVERSCAN
+  );
+
+  const visibleLines = lines.slice(startIdx, endIdx);
+
+  return (
+    <div
+      ref={containerRef}
+      className="h-full overflow-auto"
+      onScroll={handleScroll}
+    >
+      <div style={{ height: totalHeight, position: "relative" }}>
+        <pre
+          className="text-xs font-mono leading-[18px] whitespace-pre-wrap break-all text-foreground absolute left-0 right-0"
+          style={{ top: startIdx * VIRTUAL_LINE_HEIGHT }}
+        >
+          {visibleLines.join("\n")}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+function LargeResponseWarning({ size, onShow }: { size: number; onShow: () => void }) {
+  const sizeStr = size < 1048576
+    ? `${(size / 1024).toFixed(1)} KB`
+    : `${(size / 1048576).toFixed(1)} MB`;
+
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 p-8">
+      <AlertTriangle className="h-8 w-8 text-amber-500" />
+      <p className="text-sm text-foreground font-medium">Large Response ({sizeStr})</p>
+      <p className="text-xs text-muted-foreground text-center max-w-sm">
+        This response is larger than 500KB. Rendering may be slow.
+        Virtual scrolling is used for optimal performance.
+      </p>
+      <button
+        type="button"
+        onClick={onShow}
+        className="text-xs bg-primary text-primary-foreground px-4 py-2 rounded hover:bg-primary/90 transition-colors"
+      >
+        Show Response (Virtual Scroll)
+      </button>
+    </div>
+  );
+}
+
 function ResponseBody({ response, viewMode, searchQuery }: { response: ResponseData; viewMode: "pretty" | "raw"; searchQuery: string }) {
+  const [showLarge, setShowLarge] = useState(false);
+  const isLarge = response.size > LARGE_RESPONSE_THRESHOLD_BYTES;
+
   const isJSON = response.contentType.includes("json") || (() => {
     try { JSON.parse(response.body); return true; } catch { return false; }
   })();
@@ -187,6 +270,12 @@ function ResponseBody({ response, viewMode, searchQuery }: { response: ResponseD
   const isImage = response.contentType.includes("image");
 
   if (viewMode === "raw") {
+    if (isLarge && !showLarge) {
+      return <LargeResponseWarning size={response.size} onShow={() => setShowLarge(true)} />;
+    }
+    if (isLarge) {
+      return <VirtualizedText text={response.body} />;
+    }
     return <HighlightedText text={response.body} search={searchQuery} />;
   }
 
@@ -223,6 +312,17 @@ function ResponseBody({ response, viewMode, searchQuery }: { response: ResponseD
   }
 
   if (isJSON) {
+    if (isLarge && !showLarge) {
+      return <LargeResponseWarning size={response.size} onShow={() => setShowLarge(true)} />;
+    }
+    if (isLarge && !searchQuery) {
+      try {
+        const pretty = JSON.stringify(JSON.parse(response.body), null, 2);
+        return <VirtualizedText text={pretty} />;
+      } catch {
+        return <VirtualizedText text={response.body} />;
+      }
+    }
     if (searchQuery) {
       try {
         const pretty = JSON.stringify(JSON.parse(response.body), null, 2);
@@ -347,9 +447,34 @@ function ResponseCookies({ headers }: { headers: Record<string, string> }) {
 }
 
 export function ResponseViewer() {
-  const { response, isLoading } = useGetmanStore();
+  const { response, isLoading, assertionResults } = useGetmanStore();
   const [viewMode, setViewMode] = useState<"pretty" | "raw">("pretty");
   const [searchQuery, setSearchQuery] = useState("");
+
+  const exportDiagnosticLog = () => {
+    if (!response) return;
+    const log = {
+      timestamp: new Date().toISOString(),
+      status: response.status,
+      statusText: response.statusText,
+      time: response.time,
+      size: response.size,
+      contentType: response.contentType,
+      headers: response.headers,
+      bodyPreview: response.body.length > 10000
+        ? response.body.slice(0, 10000) + "\n... (truncated)"
+        : response.body,
+      assertions: assertionResults,
+    };
+
+    const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `diagnostic-${log.timestamp.replace(/[:.]/g, "-")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   if (isLoading) {
     return (
@@ -391,6 +516,14 @@ export function ResponseViewer() {
           {formatBytes(response.size)}
         </span>
         <CopyButton text={response.body} />
+        <button
+          type="button"
+          onClick={exportDiagnosticLog}
+          className="text-muted-foreground hover:text-foreground transition-colors p-1"
+          title="Export diagnostic log"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {/* Tabs */}
@@ -421,6 +554,21 @@ export function ResponseViewer() {
                 ({parseCookies(response.headers).length})
               </span>
             </TabsTrigger>
+            {assertionResults.length > 0 && (
+              <TabsTrigger
+                value="test-results"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground text-muted-foreground text-xs px-4 py-2 font-medium"
+              >
+                Tests
+                <span className={`ml-1.5 text-[10px] ${
+                  assertionResults.every((r) => r.passed)
+                    ? "text-green-500"
+                    : "text-red-500"
+                }`}>
+                  ({assertionResults.filter((r) => r.passed).length}/{assertionResults.length})
+                </span>
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* View mode toggle + search */}
@@ -464,6 +612,31 @@ export function ResponseViewer() {
         <TabsContent value="cookies" className="m-0 flex-1 overflow-auto min-h-0">
           <ResponseCookies headers={response.headers} />
         </TabsContent>
+
+        {assertionResults.length > 0 && (
+          <TabsContent value="test-results" className="m-0 flex-1 overflow-auto min-h-0 p-4">
+            <div className="flex flex-col gap-2">
+              {assertionResults.map((r, i) => (
+                <div
+                  key={r.assertionId || i}
+                  className={`flex items-center gap-2 rounded px-3 py-2 text-xs font-mono ${
+                    r.passed
+                      ? "bg-green-500/5 border border-green-500/20"
+                      : "bg-red-500/5 border border-red-500/20"
+                  }`}
+                >
+                  <span className={r.passed ? "text-green-500" : "text-red-500"}>
+                    {r.passed ? "✓" : "✗"}
+                  </span>
+                  <span className="text-foreground">{r.message}</span>
+                  {!r.passed && r.actual && (
+                    <span className="ml-auto text-muted-foreground">got: {r.actual}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

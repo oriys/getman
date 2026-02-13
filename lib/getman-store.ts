@@ -21,6 +21,49 @@ export interface KeyValue {
   enabled: boolean;
 }
 
+// ─── Test Assertions ──────────────────────────────────────────────────────────
+
+export type AssertionType = "status" | "header" | "jsonpath" | "body-contains";
+
+export interface TestAssertion {
+  id: string;
+  enabled: boolean;
+  type: AssertionType;
+  property: string;     // header name, jsonpath expression, etc.
+  comparison: "eq" | "neq" | "contains" | "gt" | "lt" | "exists" | "matches";
+  expected: string;
+}
+
+export interface AssertionResult {
+  assertionId: string;
+  passed: boolean;
+  actual: string;
+  message: string;
+}
+
+// ─── Request Settings ─────────────────────────────────────────────────────────
+
+export interface RequestSettings {
+  timeoutMs: number;
+  retryCount: number;
+  retryDelayMs: number;
+  proxyUrl: string;
+  verifySsl: boolean;
+}
+
+// ─── Collection Folders ───────────────────────────────────────────────────────
+
+export interface CollectionFolder {
+  id: string;
+  name: string;
+  folders: CollectionFolder[];
+  requests: SavedRequest[];
+}
+
+// ─── OAuth2 ───────────────────────────────────────────────────────────────────
+
+export type OAuth2GrantType = "authorization_code" | "client_credentials";
+
 export interface RequestTab {
   id: string;
   name: string;
@@ -34,13 +77,26 @@ export interface RequestTab {
   graphqlQuery: string;
   graphqlVariables: string;
   cookies: KeyValue[];
-  authType: "none" | "bearer" | "basic" | "api-key";
+  authType: "none" | "bearer" | "basic" | "api-key" | "oauth2";
   authToken: string;
   authUsername: string;
   authPassword: string;
   authApiKey: string;
   authApiValue: string;
   authApiAddTo: "header" | "query";
+  // OAuth2 fields
+  oauth2GrantType: OAuth2GrantType;
+  oauth2AuthUrl: string;
+  oauth2TokenUrl: string;
+  oauth2ClientId: string;
+  oauth2ClientSecret: string;
+  oauth2Scope: string;
+  oauth2CallbackUrl: string;
+  oauth2AccessToken: string;
+  // Request settings
+  settings: RequestSettings;
+  // Test assertions
+  assertions: TestAssertion[];
 }
 
 export interface ResponseData {
@@ -66,6 +122,7 @@ export interface Collection {
   id: string;
   name: string;
   requests: SavedRequest[];
+  folders: CollectionFolder[];
 }
 
 export interface SavedRequest {
@@ -94,6 +151,7 @@ export interface GetmanState {
   activeTabId: string;
   response: ResponseData | null;
   isLoading: boolean;
+  activeRequestId: string | null;
   history: HistoryItem[];
   collections: Collection[];
   environments: Environment[];
@@ -101,6 +159,7 @@ export interface GetmanState {
   globalVariables: EnvVariable[];
   sidebarView: "collections" | "history" | "environments";
   sidebarOpen: boolean;
+  assertionResults: AssertionResult[];
 }
 
 interface PersistedState {
@@ -128,6 +187,16 @@ export function createEmptyKV(): KeyValue {
   return { id: uid(), key: "", value: "", enabled: true };
 }
 
+export function defaultSettings(): RequestSettings {
+  return {
+    timeoutMs: 0,
+    retryCount: 0,
+    retryDelayMs: 1000,
+    proxyUrl: "",
+    verifySsl: true,
+  };
+}
+
 export function createDefaultTab(): RequestTab {
   return {
     id: uid(),
@@ -149,6 +218,16 @@ export function createDefaultTab(): RequestTab {
     authApiKey: "",
     authApiValue: "",
     authApiAddTo: "header",
+    oauth2GrantType: "authorization_code",
+    oauth2AuthUrl: "",
+    oauth2TokenUrl: "",
+    oauth2ClientId: "",
+    oauth2ClientSecret: "",
+    oauth2Scope: "",
+    oauth2CallbackUrl: "http://localhost/callback",
+    oauth2AccessToken: "",
+    settings: defaultSettings(),
+    assertions: [],
   };
 }
 
@@ -165,6 +244,7 @@ function createInitialState(): GetmanState {
     activeTabId: defaultTab.id,
     response: null,
     isLoading: false,
+    activeRequestId: null,
     history: [],
     collections: [],
     environments: [],
@@ -172,6 +252,7 @@ function createInitialState(): GetmanState {
     globalVariables: [],
     sidebarView: "collections",
     sidebarOpen: true,
+    assertionResults: [],
   };
 }
 
@@ -203,7 +284,12 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     tabs,
     activeTabId,
     history: Array.isArray(parsed.history) ? parsed.history.slice(0, 100) : [],
-    collections: Array.isArray(parsed.collections) ? parsed.collections : [],
+    collections: Array.isArray(parsed.collections)
+      ? parsed.collections.map((c: Collection) => ({
+          ...c,
+          folders: Array.isArray(c.folders) ? c.folders : [],
+        }))
+      : [],
     environments: Array.isArray(parsed.environments) ? parsed.environments : [],
     activeEnvironmentId:
       typeof parsed.activeEnvironmentId === "string" ? parsed.activeEnvironmentId : null,
@@ -214,6 +300,8 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : true,
     response: null,
     isLoading: false,
+    activeRequestId: null,
+    assertionResults: [],
   };
 }
 
@@ -371,7 +459,7 @@ export function setActiveEnvironment(id: string | null) {
 }
 
 export function addCollection(name: string) {
-  const col: Collection = { id: uid(), name, requests: [] };
+  const col: Collection = { id: uid(), name, requests: [], folders: [] };
   setState({ collections: [...state.collections, col] });
 }
 
@@ -500,6 +588,118 @@ export function resolveEnvVariables(input: string): string {
 
 export function updateGlobalVariables(variables: EnvVariable[]) {
   setState({ globalVariables: variables });
+}
+
+// ─── Request Lifecycle ────────────────────────────────────────────────────────
+
+export function setActiveRequestId(id: string | null) {
+  setState({ activeRequestId: id }, { persist: false });
+}
+
+export function setAssertionResults(results: AssertionResult[]) {
+  setState({ assertionResults: results }, { persist: false });
+}
+
+// ─── Collection Folder Actions ────────────────────────────────────────────────
+
+export function addFolderToCollection(collectionId: string, folderName: string) {
+  const folder: CollectionFolder = { id: uid(), name: folderName, folders: [], requests: [] };
+  const collections = state.collections.map((c) =>
+    c.id === collectionId ? { ...c, folders: [...c.folders, folder] } : c
+  );
+  setState({ collections });
+}
+
+export function deleteFolderFromCollection(collectionId: string, folderId: string) {
+  const collections = state.collections.map((c) =>
+    c.id === collectionId
+      ? { ...c, folders: c.folders.filter((f) => f.id !== folderId) }
+      : c
+  );
+  setState({ collections });
+}
+
+export function renameFolderInCollection(collectionId: string, folderId: string, name: string) {
+  const collections = state.collections.map((c) =>
+    c.id === collectionId
+      ? { ...c, folders: c.folders.map((f) => (f.id === folderId ? { ...f, name } : f)) }
+      : c
+  );
+  setState({ collections });
+}
+
+export function moveRequestToFolder(collectionId: string, requestId: string, targetFolderId: string | null) {
+  const collections = state.collections.map((c) => {
+    if (c.id !== collectionId) return c;
+
+    // Find the request in root or in folders
+    let request: SavedRequest | undefined;
+    let newRequests = c.requests.filter((r) => {
+      if (r.id === requestId) {
+        request = r;
+        return false;
+      }
+      return true;
+    });
+
+    const newFolders = c.folders.map((f) => {
+      const filtered = f.requests.filter((r) => {
+        if (r.id === requestId) {
+          request = r;
+          return false;
+        }
+        return true;
+      });
+      return { ...f, requests: filtered };
+    });
+
+    if (!request) return c;
+
+    if (targetFolderId === null) {
+      // Move to root
+      newRequests = [...newRequests, request];
+      return { ...c, requests: newRequests, folders: newFolders };
+    }
+
+    // Move to target folder
+    const updatedFolders = newFolders.map((f) =>
+      f.id === targetFolderId
+        ? { ...f, requests: [...f.requests, request!] }
+        : f
+    );
+    return { ...c, requests: newRequests, folders: updatedFolders };
+  });
+  setState({ collections });
+}
+
+export function saveRequestToFolder(collectionId: string, folderId: string, request: SavedRequest) {
+  const collections = state.collections.map((c) =>
+    c.id === collectionId
+      ? {
+          ...c,
+          folders: c.folders.map((f) =>
+            f.id === folderId
+              ? { ...f, requests: [...f.requests, request] }
+              : f
+          ),
+        }
+      : c
+  );
+  setState({ collections });
+}
+
+// ─── Import/Export ────────────────────────────────────────────────────────────
+
+export function importCollections(collections: Collection[]) {
+  setState({ collections: [...state.collections, ...collections] });
+}
+
+export function getCollections(): Collection[] {
+  return state.collections;
+}
+
+export function getEnvironments(): Environment[] {
+  return state.environments;
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────

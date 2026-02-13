@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { PanelLeftClose, PanelLeft, Zap } from "lucide-react";
 import {
   useGetmanStore,
@@ -13,6 +14,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+const ImportExportDialog = dynamic(
+  () => import("./import-export-dialog").then((mod) => mod.ImportExportDialog),
+  { ssr: false }
+);
+const CollectionRunnerDialog = dynamic(
+  () => import("./collection-runner-dialog").then((mod) => mod.CollectionRunnerDialog),
+  { ssr: false }
+);
 
 export function GetmanHeader() {
   const { sidebarOpen, environments, activeEnvironmentId } = useGetmanStore();
@@ -44,6 +54,11 @@ export function GetmanHeader() {
         <span className="rounded-full border border-border bg-[hsl(var(--surface-2))] px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
           v1.0
         </span>
+      </div>
+
+      <div className="flex items-center gap-1 ml-2">
+        <ImportExportDialog />
+        <CollectionRunnerDialog />
       </div>
 
       <div className="flex-1" />

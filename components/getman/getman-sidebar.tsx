@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   FolderOpen,
+  FolderPlus,
   History,
   Globe,
   ChevronRight,
@@ -12,7 +13,6 @@ import {
   ChevronDown,
   Search,
   Pencil,
-  Check,
   X,
 } from "lucide-react";
 import {
@@ -26,6 +26,9 @@ import {
   renameCollection,
   deleteRequestFromCollection,
   renameRequestInCollection,
+  addFolderToCollection,
+  deleteFolderFromCollection,
+  renameFolderInCollection,
   setActiveEnvironment,
   addEnvironment,
   deleteEnvironment,
@@ -33,6 +36,7 @@ import {
   updateGlobalVariables,
   createEmptyKV,
   type GetmanState,
+  type CollectionFolder,
 } from "@/lib/getman-store";
 import { MethodBadge } from "./method-badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -261,9 +265,99 @@ function CollectionsView() {
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const name = prompt("Folder name:");
+                      if (name?.trim()) addFolderToCollection(col.id, name.trim());
+                    }}
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                    title="Add folder"
+                  >
+                    <FolderPlus className="h-3 w-3" />
+                  </button>
                 </div>
-                {isExpanded &&
-                  col.requests.map((req) => {
+                {isExpanded && (
+                  <>
+                    {/* Folders */}
+                    {(col.folders || []).map((folder) => {
+                      const isFolderExpanded = expandedIds.has(folder.id);
+                      return (
+                        <div key={folder.id}>
+                          <div className="group flex items-center gap-1.5 pl-6 pr-2 py-1.5 hover:bg-[hsl(var(--surface-2))] cursor-pointer">
+                            <button
+                              type="button"
+                              onClick={() => toggleExpand(folder.id)}
+                              className="text-muted-foreground"
+                            >
+                              {isFolderExpanded ? (
+                                <ChevronDown className="h-3 w-3" />
+                              ) : (
+                                <ChevronRight className="h-3 w-3" />
+                              )}
+                            </button>
+                            <FolderOpen className="h-3 w-3 text-amber-500/70 shrink-0" />
+                            <span className="text-[11px] text-foreground/80 flex-1 truncate">
+                              {folder.name}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground">
+                              {folder.requests.length}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const newName = prompt("Rename folder:", folder.name);
+                                if (newName?.trim()) renameFolderInCollection(col.id, folder.id, newName.trim());
+                              }}
+                              className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                            >
+                              <Pencil className="h-2.5 w-2.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteFolderFromCollection(col.id, folder.id);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                            >
+                              <Trash2 className="h-2.5 w-2.5" />
+                            </button>
+                          </div>
+                          {isFolderExpanded &&
+                            folder.requests.map((req) => (
+                              <div
+                                key={req.id}
+                                className="group flex items-center gap-2 pl-12 pr-2 py-1.5 hover:bg-[hsl(var(--surface-2))] cursor-pointer"
+                                onClick={() => loadSavedRequest(req)}
+                                onKeyDown={(e) => e.key === "Enter" && loadSavedRequest(req)}
+                                role="button"
+                                tabIndex={0}
+                              >
+                                <MethodBadge method={req.method} size="sm" />
+                                <span className="text-xs text-foreground/80 flex-1 truncate font-mono">
+                                  {req.name}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteRequestFromCollection(col.id, req.id);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ))}
+                        </div>
+                      );
+                    })}
+
+                    {/* Root-level requests */}
+                    {col.requests.map((req) => {
                     const isEditingReq = editingRequestId === req.id;
                     return (
                       <div
@@ -337,6 +431,8 @@ function CollectionsView() {
                       </div>
                     );
                   })}
+                  </>
+                )}
               </div>
             );
           })}
