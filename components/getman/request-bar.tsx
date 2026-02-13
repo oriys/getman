@@ -281,8 +281,6 @@ export function RequestBar() {
         authToken: parsed.authToken,
         authUsername: parsed.authUsername,
         authPassword: parsed.authPassword,
-        graphqlQuery: parsed.graphqlQuery,
-        graphqlVariables: parsed.graphqlVariables,
         name: parsed.name,
       });
     }
