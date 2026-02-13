@@ -490,16 +490,23 @@ export function RequestBar() {
                 <SelectValue placeholder="Method" />
               </SelectTrigger>
               <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
-                {grpcMethods.map((m) => (
-                  <SelectItem key={m.name} value={m.name} className="font-mono text-xs">
-                    {m.name}
-                    {(m.clientStreaming || m.serverStreaming) && (
-                      <span className="ml-1 text-[9px] text-muted-foreground">
-                        {m.clientStreaming && m.serverStreaming ? "bidi" : m.serverStreaming ? "server-stream" : "client-stream"}
-                      </span>
-                    )}
-                  </SelectItem>
-                ))}
+                {grpcMethods.map((m) => {
+                  let streamLabel = "";
+                  if (m.clientStreaming && m.serverStreaming) streamLabel = "bidi";
+                  else if (m.serverStreaming) streamLabel = "server-stream";
+                  else if (m.clientStreaming) streamLabel = "client-stream";
+
+                  return (
+                    <SelectItem key={m.name} value={m.name} className="font-mono text-xs">
+                      {m.name}
+                      {streamLabel && (
+                        <span className="ml-1 text-[9px] text-muted-foreground">
+                          {streamLabel}
+                        </span>
+                      )}
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>

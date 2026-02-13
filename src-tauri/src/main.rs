@@ -549,9 +549,11 @@ fn parse_proto_content(proto_content: String) -> Result<Vec<ProtoServiceInfo>, S
     Ok(services)
 }
 
+const GRPC_STATUS_UNKNOWN: i32 = 2;
+
 fn grpc_error_response(message: impl Into<String>) -> GrpcResponsePayload {
     GrpcResponsePayload {
-        status_code: 2, // UNKNOWN
+        status_code: GRPC_STATUS_UNKNOWN,
         status_message: message.into(),
         response_json: String::new(),
         response_metadata: HashMap::new(),
