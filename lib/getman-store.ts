@@ -208,7 +208,7 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     activeEnvironmentId:
       typeof parsed.activeEnvironmentId === "string" ? parsed.activeEnvironmentId : null,
     globalVariables: Array.isArray((parsed as Partial<GetmanState>).globalVariables)
-      ? (parsed as Partial<GetmanState>).globalVariables!
+      ? (parsed as Partial<GetmanState>).globalVariables ?? []
       : [],
     sidebarView,
     sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : true,

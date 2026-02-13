@@ -84,6 +84,11 @@ function ResponseBodySearch({ body, onSearch }: { body: string; onSearch: (query
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
+  const matchCount = useMemo(() => {
+    if (!searchQuery) return 0;
+    return body.toLowerCase().split(searchQuery.toLowerCase()).length - 1;
+  }, [body, searchQuery]);
+
   if (!searchOpen) {
     return (
       <button
@@ -112,7 +117,7 @@ function ResponseBodySearch({ body, onSearch }: { body: string; onSearch: (query
       />
       {searchQuery && (
         <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-          {body.toLowerCase().split(searchQuery.toLowerCase()).length - 1} found
+          {matchCount} found
         </span>
       )}
       <button
@@ -186,10 +191,19 @@ function ResponseBody({ response, viewMode, searchQuery }: { response: ResponseD
   }
 
   if (isImage) {
-    const isBase64 = !response.body.startsWith("http");
-    const src = isBase64
-      ? `data:${response.contentType};base64,${btoa(response.body)}`
-      : response.body;
+    let src: string;
+    try {
+      const isBase64 = !response.body.startsWith("http");
+      src = isBase64
+        ? `data:${response.contentType};base64,${btoa(unescape(encodeURIComponent(response.body)))}`
+        : response.body;
+    } catch {
+      return (
+        <div className="flex items-center justify-center p-4">
+          <p className="text-muted-foreground text-sm">Image preview not available</p>
+        </div>
+      );
+    }
 
     return (
       <div className="flex flex-col items-center justify-center gap-3 p-4">
@@ -227,7 +241,7 @@ function ResponseBody({ response, viewMode, searchQuery }: { response: ResponseD
           srcDoc={response.body}
           title="HTML Preview"
           className="w-full flex-1 min-h-[300px] rounded border border-border bg-white"
-          sandbox="allow-same-origin"
+          sandbox=""
         />
       </div>
     );
