@@ -97,6 +97,9 @@ export interface RequestTab {
   settings: RequestSettings;
   // Test assertions
   assertions: TestAssertion[];
+  // Scripts
+  preRequestScript: string;
+  testScript: string;
 }
 
 export interface ResponseData {
@@ -146,6 +149,136 @@ export interface Environment {
   variables: EnvVariable[];
 }
 
+// ─── Cookie Jar ───────────────────────────────────────────────────────────────
+export interface CookieEntry {
+  id: string;
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: string;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: string;
+}
+
+// ─── Header/Param Presets ─────────────────────────────────────────────────────
+export interface Preset {
+  id: string;
+  name: string;
+  headers: KeyValue[];
+  params: KeyValue[];
+}
+
+// ─── History Filter ───────────────────────────────────────────────────────────
+export interface HistoryFilter {
+  method: HttpMethod | "ALL";
+  statusMin: number;
+  statusMax: number;
+  search: string;
+  dateFrom: string;
+  dateTo: string;
+}
+
+// ─── Workspace ────────────────────────────────────────────────────────────────
+export interface Workspace {
+  id: string;
+  name: string;
+  collections: Collection[];
+  environments: Environment[];
+  activeEnvironmentId: string | null;
+}
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+export interface RequestTemplate {
+  id: string;
+  name: string;
+  description: string;
+  tab: Partial<RequestTab>;
+}
+
+export interface AssertionTemplate {
+  id: string;
+  name: string;
+  description: string;
+  assertions: TestAssertion[];
+}
+
+// ─── Plugin ───────────────────────────────────────────────────────────────────
+export type PluginHookType = "pre-request" | "post-response" | "on-error";
+
+export interface Plugin {
+  id: string;
+  name: string;
+  enabled: boolean;
+  hookType: PluginHookType;
+  script: string;
+}
+
+// ─── Response Snapshot for Diff ───────────────────────────────────────────────
+export interface ResponseSnapshot {
+  id: string;
+  label: string;
+  timestamp: number;
+  response: ResponseData;
+  method: HttpMethod;
+  url: string;
+}
+
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+export type WsMessageDirection = "sent" | "received";
+
+export interface WsMessage {
+  id: string;
+  direction: WsMessageDirection;
+  data: string;
+  timestamp: number;
+}
+
+export interface WsConnection {
+  id: string;
+  url: string;
+  status: "connecting" | "connected" | "disconnected" | "error";
+  messages: WsMessage[];
+  protocols: string;
+}
+
+// ─── SSE ──────────────────────────────────────────────────────────────────────
+export interface SseEvent {
+  id: string;
+  eventType: string;
+  data: string;
+  lastEventId: string;
+  timestamp: number;
+}
+
+export interface SseConnection {
+  id: string;
+  url: string;
+  status: "connecting" | "connected" | "disconnected" | "error";
+  events: SseEvent[];
+  headers: KeyValue[];
+}
+
+// ─── Mock Server ──────────────────────────────────────────────────────────────
+export interface MockRoute {
+  id: string;
+  method: HttpMethod;
+  path: string;
+  statusCode: number;
+  headers: Record<string, string>;
+  body: string;
+  delay: number;
+}
+
+export interface MockServer {
+  id: string;
+  name: string;
+  port: number;
+  routes: MockRoute[];
+  running: boolean;
+}
+
 export interface GetmanState {
   tabs: RequestTab[];
   activeTabId: string;
@@ -157,9 +290,23 @@ export interface GetmanState {
   environments: Environment[];
   activeEnvironmentId: string | null;
   globalVariables: EnvVariable[];
-  sidebarView: "collections" | "history" | "environments";
+  sidebarView: "collections" | "history" | "environments" | "websocket" | "sse" | "cookies" | "plugins";
   sidebarOpen: boolean;
   assertionResults: AssertionResult[];
+  cookieJar: CookieEntry[];
+  presets: Preset[];
+  historyFilter: HistoryFilter;
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  requestTemplates: RequestTemplate[];
+  assertionTemplates: AssertionTemplate[];
+  plugins: Plugin[];
+  responseSnapshots: ResponseSnapshot[];
+  wsConnections: WsConnection[];
+  sseConnections: SseConnection[];
+  mockServers: MockServer[];
+  commandPaletteOpen: boolean;
+  previousResponse: ResponseData | null;
 }
 
 interface PersistedState {
@@ -173,6 +320,15 @@ interface PersistedState {
   globalVariables: EnvVariable[];
   sidebarView: GetmanState["sidebarView"];
   sidebarOpen: boolean;
+  cookieJar: CookieEntry[];
+  presets: Preset[];
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  requestTemplates: RequestTemplate[];
+  assertionTemplates: AssertionTemplate[];
+  plugins: Plugin[];
+  responseSnapshots: ResponseSnapshot[];
+  mockServers: MockServer[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -228,6 +384,8 @@ export function createDefaultTab(): RequestTab {
     oauth2AccessToken: "",
     settings: defaultSettings(),
     assertions: [],
+    preRequestScript: "",
+    testScript: "",
   };
 }
 
@@ -236,6 +394,9 @@ export function createDefaultTab(): RequestTab {
 type Listener = () => void;
 
 const PERSISTED_STATE_VERSION = 1;
+const MAX_RESPONSE_SNAPSHOTS = 50;
+const MAX_WS_MESSAGES = 500;
+const MAX_SSE_EVENTS = 500;
 
 function createInitialState(): GetmanState {
   const defaultTab = createDefaultTab();
@@ -253,6 +414,20 @@ function createInitialState(): GetmanState {
     sidebarView: "collections",
     sidebarOpen: true,
     assertionResults: [],
+    cookieJar: [],
+    presets: [],
+    historyFilter: { method: "ALL", statusMin: 0, statusMax: 999, search: "", dateFrom: "", dateTo: "" },
+    workspaces: [],
+    activeWorkspaceId: null,
+    requestTemplates: [],
+    assertionTemplates: [],
+    plugins: [],
+    responseSnapshots: [],
+    wsConnections: [],
+    sseConnections: [],
+    mockServers: [],
+    commandPaletteOpen: false,
+    previousResponse: null,
   };
 }
 
@@ -276,7 +451,11 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
   const sidebarView =
     parsed.sidebarView === "collections" ||
     parsed.sidebarView === "history" ||
-    parsed.sidebarView === "environments"
+    parsed.sidebarView === "environments" ||
+    parsed.sidebarView === "websocket" ||
+    parsed.sidebarView === "sse" ||
+    parsed.sidebarView === "cookies" ||
+    parsed.sidebarView === "plugins"
       ? parsed.sidebarView
       : "collections";
 
@@ -302,6 +481,25 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     isLoading: false,
     activeRequestId: null,
     assertionResults: [],
+    cookieJar: Array.isArray(parsed.cookieJar) ? parsed.cookieJar : [],
+    presets: Array.isArray(parsed.presets) ? parsed.presets : [],
+    historyFilter: { method: "ALL", statusMin: 0, statusMax: 999, search: "", dateFrom: "", dateTo: "" },
+    workspaces: Array.isArray(parsed.workspaces) ? parsed.workspaces : [],
+    activeWorkspaceId:
+      typeof parsed.activeWorkspaceId === "string" &&
+      Array.isArray(parsed.workspaces) &&
+      parsed.workspaces.some((w: Workspace) => w.id === parsed.activeWorkspaceId)
+        ? parsed.activeWorkspaceId
+        : null,
+    requestTemplates: Array.isArray(parsed.requestTemplates) ? parsed.requestTemplates : [],
+    assertionTemplates: Array.isArray(parsed.assertionTemplates) ? parsed.assertionTemplates : [],
+    plugins: Array.isArray(parsed.plugins) ? parsed.plugins : [],
+    responseSnapshots: Array.isArray(parsed.responseSnapshots) ? parsed.responseSnapshots : [],
+    wsConnections: [],
+    sseConnections: [],
+    mockServers: Array.isArray(parsed.mockServers) ? parsed.mockServers : [],
+    commandPaletteOpen: false,
+    previousResponse: null,
   };
 }
 
@@ -317,6 +515,15 @@ function serializeState(current: GetmanState): string {
     globalVariables: current.globalVariables,
     sidebarView: current.sidebarView,
     sidebarOpen: current.sidebarOpen,
+    cookieJar: current.cookieJar,
+    presets: current.presets,
+    workspaces: current.workspaces,
+    activeWorkspaceId: current.activeWorkspaceId,
+    requestTemplates: current.requestTemplates,
+    assertionTemplates: current.assertionTemplates,
+    plugins: current.plugins,
+    responseSnapshots: current.responseSnapshots,
+    mockServers: current.mockServers,
   };
 
   return JSON.stringify(payload);
@@ -700,6 +907,292 @@ export function getCollections(): Collection[] {
 
 export function getEnvironments(): Environment[] {
   return state.environments;
+}
+
+// ─── Cookie Jar Actions ───────────────────────────────────────────────────────
+
+export function addCookieEntry(entry: CookieEntry) {
+  // Replace existing cookie with same name+domain, or add new
+  const existing = state.cookieJar.findIndex(
+    (c) => c.name === entry.name && c.domain === entry.domain
+  );
+  if (existing >= 0) {
+    const jar = [...state.cookieJar];
+    jar[existing] = entry;
+    setState({ cookieJar: jar });
+  } else {
+    setState({ cookieJar: [...state.cookieJar, entry] });
+  }
+}
+
+export function removeCookieEntry(id: string) {
+  setState({ cookieJar: state.cookieJar.filter((c) => c.id !== id) });
+}
+
+export function clearCookieJar(domain?: string) {
+  if (domain) {
+    setState({ cookieJar: state.cookieJar.filter((c) => c.domain !== domain) });
+  } else {
+    setState({ cookieJar: [] });
+  }
+}
+
+// ─── Preset Actions ───────────────────────────────────────────────────────────
+
+export function addPreset(preset: Preset) {
+  setState({ presets: [...state.presets, preset] });
+}
+
+export function deletePreset(id: string) {
+  setState({ presets: state.presets.filter((p) => p.id !== id) });
+}
+
+export function updatePreset(id: string, partial: Partial<Preset>) {
+  setState({ presets: state.presets.map((p) => p.id === id ? { ...p, ...partial } : p) });
+}
+
+// ─── History Filter Actions ───────────────────────────────────────────────────
+
+export function setHistoryFilter(filter: Partial<HistoryFilter>) {
+  setState({ historyFilter: { ...state.historyFilter, ...filter } });
+}
+
+export function resetHistoryFilter() {
+  setState({ historyFilter: { method: "ALL", statusMin: 0, statusMax: 999, search: "", dateFrom: "", dateTo: "" } });
+}
+
+export function getFilteredHistory(): HistoryItem[] {
+  const f = state.historyFilter;
+  return state.history.filter((item) => {
+    if (f.method !== "ALL" && item.method !== f.method) return false;
+    if (item.status < f.statusMin || item.status > f.statusMax) return false;
+    if (f.search && !item.url.toLowerCase().includes(f.search.toLowerCase())) return false;
+    if (f.dateFrom && item.timestamp < new Date(f.dateFrom).getTime()) return false;
+    if (f.dateTo && item.timestamp > new Date(f.dateTo).getTime() + 86400000) return false;
+    return true;
+  });
+}
+
+// ─── Workspace Actions ────────────────────────────────────────────────────────
+
+export function addWorkspace(name: string) {
+  const ws: Workspace = { id: uid(), name, collections: [], environments: [], activeEnvironmentId: null };
+  setState({ workspaces: [...state.workspaces, ws] });
+}
+
+export function deleteWorkspace(id: string) {
+  setState({
+    workspaces: state.workspaces.filter((w) => w.id !== id),
+    activeWorkspaceId: state.activeWorkspaceId === id ? null : state.activeWorkspaceId,
+  });
+}
+
+export function setActiveWorkspace(id: string | null) {
+  setState({ activeWorkspaceId: id });
+}
+
+// ─── Template Actions ─────────────────────────────────────────────────────────
+
+export function addRequestTemplate(template: RequestTemplate) {
+  setState({ requestTemplates: [...state.requestTemplates, template] });
+}
+
+export function deleteRequestTemplate(id: string) {
+  setState({ requestTemplates: state.requestTemplates.filter((t) => t.id !== id) });
+}
+
+export function addAssertionTemplate(template: AssertionTemplate) {
+  setState({ assertionTemplates: [...state.assertionTemplates, template] });
+}
+
+export function deleteAssertionTemplate(id: string) {
+  setState({ assertionTemplates: state.assertionTemplates.filter((t) => t.id !== id) });
+}
+
+// ─── Plugin Actions ───────────────────────────────────────────────────────────
+
+export function addPlugin(plugin: Plugin) {
+  setState({ plugins: [...state.plugins, plugin] });
+}
+
+export function deletePlugin(id: string) {
+  setState({ plugins: state.plugins.filter((p) => p.id !== id) });
+}
+
+export function updatePlugin(id: string, partial: Partial<Plugin>) {
+  setState({ plugins: state.plugins.map((p) => p.id === id ? { ...p, ...partial } : p) });
+}
+
+export function togglePlugin(id: string) {
+  setState({ plugins: state.plugins.map((p) => p.id === id ? { ...p, enabled: !p.enabled } : p) });
+}
+
+// ─── Response Snapshot & Diff Actions ─────────────────────────────────────────
+
+export function saveResponseSnapshot(label: string) {
+  if (!state.response) return;
+  const tab = getActiveTab();
+  const snapshot: ResponseSnapshot = {
+    id: uid(),
+    label,
+    timestamp: Date.now(),
+    response: state.response,
+    method: tab?.method ?? "GET",
+    url: tab?.url ?? "",
+  };
+  setState({ responseSnapshots: [...state.responseSnapshots, snapshot].slice(-MAX_RESPONSE_SNAPSHOTS) });
+}
+
+export function deleteResponseSnapshot(id: string) {
+  setState({ responseSnapshots: state.responseSnapshots.filter((s) => s.id !== id) });
+}
+
+export function clearResponseSnapshots() {
+  setState({ responseSnapshots: [] });
+}
+
+// ─── WebSocket Actions ────────────────────────────────────────────────────────
+
+export function addWsConnection(url: string, protocols: string) {
+  const conn: WsConnection = { id: uid(), url, status: "connecting", messages: [], protocols };
+  setState({ wsConnections: [...state.wsConnections, conn] });
+  return conn.id;
+}
+
+export function updateWsConnection(id: string, partial: Partial<WsConnection>) {
+  setState({ wsConnections: state.wsConnections.map((c) => c.id === id ? { ...c, ...partial } : c) });
+}
+
+export function addWsMessage(connectionId: string, message: WsMessage) {
+  setState({
+    wsConnections: state.wsConnections.map((c) =>
+      c.id === connectionId ? { ...c, messages: [...c.messages, message].slice(-MAX_WS_MESSAGES) } : c
+    ),
+  });
+}
+
+export function removeWsConnection(id: string) {
+  setState({ wsConnections: state.wsConnections.filter((c) => c.id !== id) });
+}
+
+// ─── SSE Actions ──────────────────────────────────────────────────────────────
+
+export function addSseConnection(url: string, headers: KeyValue[]) {
+  const conn: SseConnection = { id: uid(), url, status: "connecting", events: [], headers };
+  setState({ sseConnections: [...state.sseConnections, conn] });
+  return conn.id;
+}
+
+export function updateSseConnection(id: string, partial: Partial<SseConnection>) {
+  setState({ sseConnections: state.sseConnections.map((c) => c.id === id ? { ...c, ...partial } : c) });
+}
+
+export function addSseEvent(connectionId: string, event: SseEvent) {
+  setState({
+    sseConnections: state.sseConnections.map((c) =>
+      c.id === connectionId ? { ...c, events: [...c.events, event].slice(-MAX_SSE_EVENTS) } : c
+    ),
+  });
+}
+
+export function removeSseConnection(id: string) {
+  setState({ sseConnections: state.sseConnections.filter((c) => c.id !== id) });
+}
+
+// ─── Mock Server Actions ──────────────────────────────────────────────────────
+
+export function addMockServer(name: string, port: number) {
+  const server: MockServer = { id: uid(), name, port, routes: [], running: false };
+  setState({ mockServers: [...state.mockServers, server] });
+}
+
+export function deleteMockServer(id: string) {
+  setState({ mockServers: state.mockServers.filter((s) => s.id !== id) });
+}
+
+export function updateMockServer(id: string, partial: Partial<MockServer>) {
+  setState({ mockServers: state.mockServers.map((s) => s.id === id ? { ...s, ...partial } : s) });
+}
+
+export function addMockRoute(serverId: string, route: MockRoute) {
+  setState({
+    mockServers: state.mockServers.map((s) =>
+      s.id === serverId ? { ...s, routes: [...s.routes, route] } : s
+    ),
+  });
+}
+
+export function deleteMockRoute(serverId: string, routeId: string) {
+  setState({
+    mockServers: state.mockServers.map((s) =>
+      s.id === serverId ? { ...s, routes: s.routes.filter((r) => r.id !== routeId) } : s
+    ),
+  });
+}
+
+export function createMockFromResponse(name: string, port: number) {
+  const tab = getActiveTab();
+  const response = state.response;
+  if (!tab || !response) return;
+
+  const resolvedUrl = resolveEnvVariables(tab.url);
+  let pathname = "/";
+  try { pathname = new URL(resolvedUrl).pathname; } catch { /* use default */ }
+
+  const route: MockRoute = {
+    id: uid(),
+    method: tab.method,
+    path: pathname,
+    statusCode: response.status,
+    headers: response.headers,
+    body: response.body,
+    delay: 0,
+  };
+
+  const server: MockServer = { id: uid(), name, port, routes: [route], running: false };
+  setState({ mockServers: [...state.mockServers, server] });
+}
+
+// ─── Command Palette ──────────────────────────────────────────────────────────
+
+export function setCommandPaletteOpen(open: boolean) {
+  setState({ commandPaletteOpen: open }, { persist: false });
+}
+
+// ─── Previous Response (for diff) ─────────────────────────────────────────────
+
+export function setPreviousResponse(response: ResponseData | null) {
+  setState({ previousResponse: response }, { persist: false });
+}
+
+// ─── Request Deduplication Detection ──────────────────────────────────────────
+
+export function findDuplicateRequests(): { url: string; method: HttpMethod; count: number; tabIds: string[] }[] {
+  const map = new Map<string, { method: HttpMethod; url: string; tabIds: string[] }>();
+  for (const tab of state.tabs) {
+    if (!tab.url.trim()) continue;
+    const key = `${tab.method}::${tab.url.trim().toLowerCase()}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.tabIds.push(tab.id);
+    } else {
+      map.set(key, { method: tab.method, url: tab.url, tabIds: [tab.id] });
+    }
+  }
+  return Array.from(map.values())
+    .filter((entry) => entry.tabIds.length > 1)
+    .map((entry) => ({ ...entry, count: entry.tabIds.length }));
+}
+
+// ─── Batch Environment Switch & Replay ────────────────────────────────────────
+
+export function getRecentRequests(count: number = 10): HistoryItem[] {
+  return state.history.slice(0, count);
+}
+
+export function switchEnvironmentAndGetReplayData(envId: string | null): HistoryItem[] {
+  setActiveEnvironment(envId);
+  return getRecentRequests();
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
