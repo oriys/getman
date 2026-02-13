@@ -5,6 +5,12 @@ export interface SendRequestPayload {
   method: string;
   headers: Record<string, string>;
   body?: string;
+  requestId?: string;
+  timeoutMs?: number;
+  retryCount?: number;
+  retryDelayMs?: number;
+  proxyUrl?: string;
+  verifySsl?: boolean;
 }
 
 export interface HttpResponseData {
@@ -30,35 +36,65 @@ function isTauriRuntime(): boolean {
   );
 }
 
+// ─── Cancel support for browser-based requests ──────────────────────────────
+
+const abortControllers = new Map<string, AbortController>();
+
 async function fetchResponse(payload: SendRequestPayload): Promise<HttpResponseData> {
+  const controller = new AbortController();
+  if (payload.requestId) {
+    abortControllers.set(payload.requestId, controller);
+  }
+
   const requestInit: RequestInit = {
     method: payload.method,
     headers: payload.headers,
+    signal: controller.signal,
   };
 
   if (payload.body && isBodyAllowed(payload.method)) {
     requestInit.body = payload.body;
   }
 
-  const start = performance.now();
-  const response = await fetch(payload.url, requestInit);
-  const elapsed = Math.round(performance.now() - start);
-  const text = await response.text();
+  const maxRetries = payload.retryCount ?? 0;
+  const retryDelay = payload.retryDelayMs ?? 1000;
+  let lastError: Error | null = null;
 
-  const headers: Record<string, string> = {};
-  response.headers.forEach((value, key) => {
-    headers[key] = value;
-  });
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    }
 
-  return {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-    body: text,
-    time: elapsed,
-    size: new TextEncoder().encode(text).length,
-    contentType: response.headers.get("content-type") || "text/plain",
-  };
+    try {
+      const start = performance.now();
+      const response = await fetch(payload.url, requestInit);
+      const elapsed = Math.round(performance.now() - start);
+      const text = await response.text();
+
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+
+      return {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+        body: text,
+        time: elapsed,
+        size: new TextEncoder().encode(text).length,
+        contentType: response.headers.get("content-type") || "text/plain",
+      };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new Error("Request cancelled");
+      }
+      lastError = error instanceof Error ? error : new Error("Unknown error");
+      if (attempt < maxRetries) continue;
+    }
+  }
+
+  throw lastError ?? new Error("Request failed");
 }
 
 function toErrorResponse(error: unknown): HttpResponseData {
@@ -96,7 +132,32 @@ export async function sendHttpRequest(
     return await fetchResponse(payload);
   } catch (error) {
     return toErrorResponse(error);
+  } finally {
+    if (payload.requestId) {
+      abortControllers.delete(payload.requestId);
+    }
   }
+}
+
+export async function cancelHttpRequest(requestId: string): Promise<boolean> {
+  // Try Tauri first
+  if (isTauriRuntime()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<boolean>("cancel_http_request", { requestId });
+    } catch {
+      // fallback to browser abort
+    }
+  }
+
+  // Browser fallback
+  const controller = abortControllers.get(requestId);
+  if (controller) {
+    controller.abort();
+    abortControllers.delete(requestId);
+    return true;
+  }
+  return false;
 }
 
 export async function loadPersistedState(): Promise<string | null> {
