@@ -98,7 +98,7 @@ export function CodeGeneratorDialog() {
               {copied ? "Copied!" : "Copy"}
             </button>
           </div>
-          <div className="max-h-[400px] overflow-auto rounded-lg border border-border bg-[hsl(var(--surface-2))] p-4">
+          <div className="max-h-[400px] overflow-y-auto overflow-x-hidden rounded-lg border border-border bg-[hsl(var(--surface-2))] p-4">
             <pre className="font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-words">
               {code}
             </pre>
