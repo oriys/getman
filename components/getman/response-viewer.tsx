@@ -179,7 +179,7 @@ function HighlightedText({ text, search }: { text: string; search: string }) {
 
 // ─── Large Response Virtual Rendering ────────────────────────────────────────
 
-const LARGE_RESPONSE_THRESHOLD = 500_000; // 500KB
+const LARGE_RESPONSE_THRESHOLD_BYTES = 500_000; // 500KB
 const VIRTUAL_LINE_HEIGHT = 18;
 const VIRTUAL_OVERSCAN = 20;
 
@@ -259,7 +259,7 @@ function LargeResponseWarning({ size, onShow }: { size: number; onShow: () => vo
 
 function ResponseBody({ response, viewMode, searchQuery }: { response: ResponseData; viewMode: "pretty" | "raw"; searchQuery: string }) {
   const [showLarge, setShowLarge] = useState(false);
-  const isLarge = response.size > LARGE_RESPONSE_THRESHOLD;
+  const isLarge = response.size > LARGE_RESPONSE_THRESHOLD_BYTES;
 
   const isJSON = response.contentType.includes("json") || (() => {
     try { JSON.parse(response.body); return true; } catch { return false; }

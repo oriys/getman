@@ -101,7 +101,8 @@ function parseDataSource(source?: DataSource): Record<string, string>[] {
 function substituteDataVariables(input: string, data: Record<string, string>): string {
   let result = input;
   for (const [key, value] of Object.entries(data)) {
-    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(`\\{\\{${escaped}\\}\\}`, "g"), value);
   }
   return result;
 }

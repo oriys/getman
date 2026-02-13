@@ -15,6 +15,9 @@ function evaluateJsonPath(obj: unknown, path: string): unknown {
     path = "$." + path;
   }
 
+  // Handle root-level path (just "$" or "$." or "$[")
+  if (path.length <= 2) return obj;
+
   const segments: string[] = [];
   let current = "";
   let inBracket = false;

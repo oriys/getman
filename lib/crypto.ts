@@ -26,6 +26,9 @@ export function maskToken(value: string): string {
 const ALGORITHM = "AES-GCM";
 const KEY_LENGTH = 256;
 const IV_LENGTH = 12;
+// OWASP recommends ≥210,000 iterations for PBKDF2-SHA256.
+// We use 210,000 to balance security and performance in a desktop app context.
+const PBKDF2_ITERATIONS = 210_000;
 
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const encoder = new TextEncoder();
@@ -41,7 +44,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
     {
       name: "PBKDF2",
       salt,
-      iterations: 100000,
+      iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256",
     },
     keyMaterial,
