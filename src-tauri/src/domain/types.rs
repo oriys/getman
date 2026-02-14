@@ -71,6 +71,13 @@ pub struct ProtoFieldInfo {
     pub is_repeated: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrpcReflectionResponse {
+    pub services: Vec<ProtoServiceInfo>,
+    pub descriptor_bytes: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrpcRequestPayload {
@@ -84,6 +91,8 @@ pub struct GrpcRequestPayload {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub descriptor_bytes: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

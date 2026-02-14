@@ -329,6 +329,7 @@ export function RequestBar() {
         metadata,
         timeoutMs: settings.timeoutMs > 0 ? settings.timeoutMs : undefined,
         requestId,
+        descriptorBytes: tab.grpcDescriptorBytes || undefined,
       });
 
       setGrpcResponse(data);
