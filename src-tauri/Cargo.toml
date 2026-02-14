@@ -22,6 +22,9 @@ prost-reflect = { version = "0.16", features = ["serde"] }
 protox = "0.9"
 bytes = "1"
 http = "1"
+prost-types = "0.14"
+tokio-stream = "0.1"
+base64 = "0.22"
 
 [profile.release]
 codegen-units = 1

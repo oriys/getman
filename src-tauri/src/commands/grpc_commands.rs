@@ -1,6 +1,6 @@
-use crate::domain::{GrpcRequestPayload, GrpcResponsePayload, ProtoServiceInfo};
+use crate::domain::{GrpcReflectionResponse, GrpcRequestPayload, GrpcResponsePayload, ProtoServiceInfo};
 use crate::engine::cancel::CancelRegistry;
-use crate::engine::grpc::{grpc_error_response, parse_proto_content_impl, send_grpc_request_impl};
+use crate::engine::grpc::{grpc_error_response, fetch_grpc_reflection_impl, parse_proto_content_impl, send_grpc_request_impl};
 use tauri::State;
 
 #[tauri::command]
@@ -8,6 +8,13 @@ pub fn parse_proto_content(
     proto_content: String,
 ) -> Result<Vec<ProtoServiceInfo>, String> {
     parse_proto_content_impl(&proto_content)
+}
+
+#[tauri::command]
+pub async fn fetch_grpc_reflection(
+    endpoint: String,
+) -> Result<GrpcReflectionResponse, String> {
+    fetch_grpc_reflection_impl(&endpoint).await
 }
 
 #[tauri::command]

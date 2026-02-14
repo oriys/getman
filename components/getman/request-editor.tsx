@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useActiveTab, updateActiveTab, updateActiveTabParams } from "@/lib/getman-store";
-import { parseProtoContent } from "@/lib/tauri";
+import { parseProtoContent, fetchGrpcReflection } from "@/lib/tauri";
 import { KVEditor } from "./kv-editor";
 import { AuthEditor } from "./auth-editor";
 import { BodyEditor } from "./body-editor";
@@ -13,6 +13,7 @@ function GrpcProtoEditor() {
   const tab = useActiveTab();
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
+  const [reflecting, setReflecting] = useState(false);
 
   if (!tab) return null;
 
@@ -28,6 +29,7 @@ function GrpcProtoEditor() {
         grpcServices: services,
         grpcServiceName: services[0]?.fullName ?? "",
         grpcMethodName: services[0]?.methods[0]?.name ?? "",
+        grpcDescriptorBytes: "",
       });
     } catch (error) {
       setParseError(
@@ -38,13 +40,47 @@ function GrpcProtoEditor() {
     }
   };
 
+  const handleServerReflection = async () => {
+    if (!tab.url?.trim()) {
+      setParseError("Enter a server address first");
+      return;
+    }
+
+    setReflecting(true);
+    setParseError(null);
+
+    try {
+      const result = await fetchGrpcReflection(tab.url);
+      updateActiveTab({
+        grpcServices: result.services,
+        grpcServiceName: result.services[0]?.fullName ?? "",
+        grpcMethodName: result.services[0]?.methods[0]?.name ?? "",
+        grpcDescriptorBytes: result.descriptorBytes,
+      });
+    } catch (error) {
+      setParseError(
+        error instanceof Error ? error.message : "Failed to fetch server reflection"
+      );
+    } finally {
+      setReflecting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50">
         <span className="text-[11px] font-medium text-muted-foreground">
-          Paste your .proto file content below
+          Paste your .proto file content below, or use server reflection
         </span>
         <div className="flex-1" />
+        <button
+          type="button"
+          onClick={handleServerReflection}
+          disabled={!tab.url?.trim() || reflecting}
+          className="text-[11px] font-medium bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 px-3 py-1 rounded transition-colors disabled:opacity-50"
+        >
+          {reflecting ? "Reflecting..." : "Server Reflection"}
+        </button>
         <button
           type="button"
           onClick={handleParseProto}
@@ -63,6 +99,7 @@ function GrpcProtoEditor() {
         <div className="px-3 py-1.5 text-[11px] text-green-500 bg-green-500/5 border-b border-green-500/20">
           Found {tab.grpcServices.length} service(s) with{" "}
           {tab.grpcServices.reduce((acc, s) => acc + s.methods.length, 0)} method(s)
+          {tab.grpcDescriptorBytes ? " (via reflection)" : ""}
         </div>
       )}
       <textarea

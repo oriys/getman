@@ -135,6 +135,7 @@ export interface RequestTab {
   grpcRequestBody: string;
   grpcMetadata: KeyValue[];
   grpcServices: ProtoServiceInfo[];
+  grpcDescriptorBytes: string;
 }
 
 export interface ResponseData {
@@ -507,6 +508,7 @@ export function createDefaultTab(): RequestTab {
     grpcRequestBody: "{}",
     grpcMetadata: [createEmptyKV()],
     grpcServices: [],
+    grpcDescriptorBytes: "",
   };
 }
 

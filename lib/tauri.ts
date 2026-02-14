@@ -34,6 +34,7 @@ export interface GrpcRequestPayload {
   metadata: Record<string, string>;
   timeoutMs?: number;
   requestId?: string;
+  descriptorBytes?: string;
 }
 
 export interface GrpcResponseData {
@@ -43,6 +44,11 @@ export interface GrpcResponseData {
   responseMetadata: Record<string, string>;
   time: number;
   size: number;
+}
+
+export interface GrpcReflectionResponse {
+  services: ProtoServiceInfo[];
+  descriptorBytes: string;
 }
 
 export interface ProtoServiceInfo {
@@ -381,4 +387,21 @@ export async function sendGrpcRequest(
     time: 0,
     size: 0,
   };
+}
+
+export async function fetchGrpcReflection(
+  endpoint: string
+): Promise<GrpcReflectionResponse> {
+  if (isTauriRuntime()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<GrpcReflectionResponse>("fetch_grpc_reflection", {
+        endpoint,
+      });
+    } catch (error) {
+      throw error instanceof Error ? error : new Error("Failed to fetch gRPC reflection");
+    }
+  }
+
+  throw new Error("gRPC reflection is only supported in the desktop app");
 }

@@ -1061,10 +1061,12 @@ dependencies = [
 name = "getman"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "http",
  "prost",
  "prost-reflect",
+ "prost-types",
  "protox",
  "reqwest 0.12.28",
  "rusqlite",
@@ -1073,6 +1075,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+ "tokio-stream",
  "tonic",
 ]
 
