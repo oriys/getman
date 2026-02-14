@@ -2,7 +2,7 @@
 
 import React, { useEffect, useCallback, useRef } from "react"
 
-import { Send, Loader2, X, Settings2, Copy, Check } from "lucide-react";
+import { Send, Loader2, X, Settings2, Copy, Check, Eye } from "lucide-react";
 import {
   useActiveTab,
   useGetmanStore,
@@ -163,6 +163,100 @@ function RequestSettingsDialog() {
             <p className="text-[10px] text-amber-500">
               ⚠ SSL verification is disabled. This is insecure and should only be used for local development.
             </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PreviewResolvedDialog() {
+  const tab = useActiveTab();
+  if (!tab) return null;
+
+  const resolvedUrl = resolveEnvVariables(tab.url);
+  const resolvedHeaders: { key: string; value: string }[] = [];
+  for (const h of tab.headers) {
+    if (h.enabled && h.key) {
+      resolvedHeaders.push({
+        key: h.key,
+        value: resolveEnvVariables(h.value),
+      });
+    }
+  }
+  const resolvedParams: { key: string; value: string }[] = [];
+  for (const p of tab.params) {
+    if (p.enabled && p.key) {
+      resolvedParams.push({
+        key: p.key,
+        value: resolveEnvVariables(p.value),
+      });
+    }
+  }
+  const resolvedBody = tab.bodyContent
+    ? resolveEnvVariables(tab.bodyContent)
+    : undefined;
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          disabled={!tab.url.trim()}
+          className="flex h-11 items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors border-r border-border/80 disabled:cursor-not-allowed disabled:opacity-50"
+          title="Preview Resolved Request"
+        >
+          <Eye className="h-4 w-4" />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="bg-[hsl(var(--surface-1))] border-border sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle className="text-foreground text-sm">Resolved Request Preview</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 max-h-[400px] overflow-y-auto">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Method & URL</span>
+            <div className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground break-all">
+              <span className="font-bold">{tab.method}</span>{" "}
+              {resolvedUrl}
+            </div>
+          </div>
+
+          {resolvedParams.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Query Parameters</span>
+              <div className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs space-y-0.5">
+                {resolvedParams.map((p, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-primary font-medium">{p.key}:</span>
+                    <span className="text-foreground break-all">{p.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resolvedHeaders.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Headers</span>
+              <div className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs space-y-0.5">
+                {resolvedHeaders.map((h, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-primary font-medium">{h.key}:</span>
+                    <span className="text-foreground break-all">{h.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resolvedBody && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Body</span>
+              <pre className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground whitespace-pre-wrap break-all max-h-[200px] overflow-y-auto">
+                {resolvedBody}
+              </pre>
+            </div>
           )}
         </div>
       </DialogContent>
@@ -584,6 +678,7 @@ export function RequestBar() {
         />
 
         {!isGrpc && <RequestSettingsDialog />}
+        {!isGrpc && <PreviewResolvedDialog />}
         {!isGrpc && (
           <button
             type="button"
