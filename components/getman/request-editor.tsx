@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useActiveTab, updateActiveTab } from "@/lib/getman-store";
+import { useActiveTab, updateActiveTab, updateActiveTabParams } from "@/lib/getman-store";
 import { parseProtoContent } from "@/lib/tauri";
 import { KVEditor } from "./kv-editor";
 import { AuthEditor } from "./auth-editor";
@@ -186,7 +186,7 @@ export function RequestEditor() {
         <TabsContent value="params" className="m-0 h-full">
           <KVEditor
             items={tab.params}
-            onChange={(params) => updateActiveTab({ params })}
+            onChange={(params) => updateActiveTabParams(params)}
             keyPlaceholder="Parameter"
             valuePlaceholder="Value"
           />

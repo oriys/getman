@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { hydrateStore, useGetmanStore } from "@/lib/getman-store";
+import { hydrateStore, useGetmanStore, addTab, setCommandPaletteOpen } from "@/lib/getman-store";
 import { GetmanHeader } from "./getman-header";
 import { TabBar } from "./tab-bar";
 import { RequestBar } from "./request-bar";
@@ -35,6 +35,24 @@ export function GetmanApp() {
   useEffect(() => {
     void hydrateStore();
   }, []);
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+
+    if (e.key === "k") {
+      e.preventDefault();
+      setCommandPaletteOpen(true);
+    } else if (e.key === "n") {
+      e.preventDefault();
+      addTab();
+    }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleKeyDown]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background">

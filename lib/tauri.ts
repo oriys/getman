@@ -243,6 +243,97 @@ export async function savePersistedState(stateJson: string): Promise<void> {
   window.localStorage.setItem(LOCAL_STATE_KEY, stateJson);
 }
 
+// ─── Environment / Resolve ────────────────────────────────────────────────────
+
+export interface ResolveRequestPayload {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+  environmentId?: string | null;
+}
+
+export interface ResolvedRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+export interface EnvVariablePayload {
+  id: string;
+  key: string;
+  value: string;
+  enabled: boolean;
+}
+
+export interface EnvironmentPayload {
+  id: string;
+  name: string;
+  variables: EnvVariablePayload[];
+}
+
+export async function resolveRequest(
+  payload: ResolveRequestPayload,
+  globalVariables: EnvVariablePayload[],
+  environments: EnvironmentPayload[]
+): Promise<ResolvedRequest> {
+  if (isTauriRuntime()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<ResolvedRequest>("resolve_request", {
+        payload,
+        globalVariables,
+        environments,
+      });
+    } catch {
+      // Fall back to frontend-only resolution
+    }
+  }
+
+  // Frontend fallback: resolve variables locally
+  const variables: Record<string, string> = {};
+
+  // Global variables (lowest priority)
+  for (const v of globalVariables) {
+    if (v.enabled && v.key) {
+      variables[v.key] = v.value;
+    }
+  }
+
+  // Environment variables (override globals)
+  if (payload.environmentId) {
+    const env = environments.find((e) => e.id === payload.environmentId);
+    if (env) {
+      for (const v of env.variables) {
+        if (v.enabled && v.key) {
+          variables[v.key] = v.value;
+        }
+      }
+    }
+  }
+
+  const interpolate = (input: string): string => {
+    let result = input;
+    for (const [key, value] of Object.entries(variables)) {
+      result = result.replaceAll(`{{${key}}}`, value);
+    }
+    return result;
+  };
+
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(payload.headers)) {
+    headers[interpolate(k)] = interpolate(v);
+  }
+
+  return {
+    url: interpolate(payload.url),
+    method: payload.method,
+    headers,
+    body: payload.body ? interpolate(payload.body) : undefined,
+  };
+}
+
 // ─── gRPC Functions ──────────────────────────────────────────────────────────
 
 export async function parseProtoContent(

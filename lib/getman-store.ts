@@ -399,6 +399,74 @@ export function defaultSettings(): RequestSettings {
   };
 }
 
+// ─── URL ↔ Params Sync ───────────────────────────────────────────────────────
+
+/**
+ * Extract query parameters from a URL string and return as KeyValue[].
+ * Always appends an empty KV row at the end for user input.
+ */
+export function extractParamsFromUrl(url: string): KeyValue[] {
+  const params: KeyValue[] = [];
+  try {
+    const qIdx = url.indexOf("?");
+    if (qIdx === -1) return [createEmptyKV()];
+    const queryString = url.slice(qIdx + 1);
+    const searchParams = new URLSearchParams(queryString);
+    searchParams.forEach((value, key) => {
+      params.push({ id: uid(), key, value, enabled: true });
+    });
+  } catch {
+    // If URL parsing fails, return current empty state
+  }
+  if (params.length === 0) return [createEmptyKV()];
+  params.push(createEmptyKV());
+  return params;
+}
+
+/**
+ * Build a URL string by replacing the query portion with params from the table.
+ * Preserves the base URL (everything before '?').
+ */
+export function buildUrlFromParams(currentUrl: string, params: KeyValue[]): string {
+  const qIdx = currentUrl.indexOf("?");
+  const baseUrl = qIdx === -1 ? currentUrl : currentUrl.slice(0, qIdx);
+
+  const enabledParams = params.filter((p) => p.enabled && p.key);
+  if (enabledParams.length === 0) return baseUrl;
+
+  const searchParams = new URLSearchParams();
+  for (const p of enabledParams) {
+    searchParams.append(p.key, p.value);
+  }
+  return `${baseUrl}?${searchParams.toString()}`;
+}
+
+/**
+ * Update the active tab URL when params change, and sync params → URL.
+ */
+export function updateActiveTabParams(params: KeyValue[]) {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const newUrl = buildUrlFromParams(tab.url, params);
+  const tabs = state.tabs.map((t) =>
+    t.id === state.activeTabId ? { ...t, params, url: newUrl } : t
+  );
+  setState({ tabs });
+}
+
+/**
+ * Update the active tab URL and sync URL → params.
+ */
+export function updateActiveTabUrl(url: string) {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const newParams = extractParamsFromUrl(url);
+  const tabs = state.tabs.map((t) =>
+    t.id === state.activeTabId ? { ...t, url, params: newParams } : t
+  );
+  setState({ tabs });
+}
+
 export function createDefaultTab(): RequestTab {
   return {
     id: uid(),

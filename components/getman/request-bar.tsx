@@ -1,12 +1,13 @@
 "use client";
 
-import React from "react"
+import React, { useEffect, useCallback, useRef } from "react"
 
-import { Send, Loader2, X, Settings2 } from "lucide-react";
+import { Send, Loader2, X, Settings2, Copy, Check } from "lucide-react";
 import {
   useActiveTab,
   useGetmanStore,
   updateActiveTab,
+  updateActiveTabUrl,
   setResponse,
   setGrpcResponse,
   setIsLoading,
@@ -23,6 +24,7 @@ import {
 import { sendHttpRequest, cancelHttpRequest, sendGrpcRequest, parseProtoContent } from "@/lib/tauri";
 import { runAssertions } from "@/lib/assertions";
 import { isCurlCommand, parseCurlCommand } from "@/lib/curl-parser";
+import { generateCode } from "@/lib/code-generator";
 import { CodeGeneratorDialog } from "./code-generator-dialog";
 import {
   Select,
@@ -171,9 +173,31 @@ function RequestSettingsDialog() {
 export function RequestBar() {
   const store = useGetmanStore();
   const tab = useActiveTab();
+  const sendRef = useRef<(() => void) | null>(null);
+  const [curlCopied, setCurlCopied] = React.useState(false);
+
+  // Global Cmd/Ctrl+Enter shortcut to send request
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        sendRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   if (!tab) return null;
 
   const isGrpc = (tab.requestType ?? "http") === "grpc";
+
+  const handleCopyAsCurl = () => {
+    const curl = generateCode(tab, "curl");
+    navigator.clipboard.writeText(curl);
+    setCurlCopied(true);
+    setTimeout(() => setCurlCopied(false), 2000);
+  };
 
   const handleCancel = async () => {
     if (store.activeRequestId) {
@@ -396,6 +420,7 @@ export function RequestBar() {
   };
 
   const handleSend = isGrpc ? sendGrpc : sendRequest;
+  sendRef.current = handleSend;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -547,12 +572,33 @@ export function RequestBar() {
           className="h-11 flex-1 bg-transparent px-3 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
           placeholder={isGrpc ? "Enter gRPC server address (e.g., http://localhost:50051)" : "Enter request URL or paste cURL..."}
           value={tab.url}
-          onChange={(e) => updateActiveTab({ url: e.target.value })}
+          onChange={(e) => {
+            if (isGrpc) {
+              updateActiveTab({ url: e.target.value });
+            } else {
+              updateActiveTabUrl(e.target.value);
+            }
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
         />
 
         {!isGrpc && <RequestSettingsDialog />}
+        {!isGrpc && (
+          <button
+            type="button"
+            onClick={handleCopyAsCurl}
+            disabled={!tab.url.trim()}
+            className="flex h-11 items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors border-r border-border/80 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Copy as cURL"
+          >
+            {curlCopied ? (
+              <Check className="h-4 w-4 text-primary" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+          </button>
+        )}
         {!isGrpc && <CodeGeneratorDialog />}
 
         {store.isLoading ? (
