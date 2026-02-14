@@ -140,6 +140,8 @@ export function RequestEditor() {
   if (!tab) return null;
 
   const isGrpc = (tab.requestType ?? "http") === "grpc";
+  const isGraphql = (tab.requestType ?? "http") === "graphql";
+  const isWebsocket = (tab.requestType ?? "http") === "websocket";
 
   const enabledParams = tab.params.filter((p) => p.enabled && p.key).length;
   const enabledHeaders = tab.headers.filter((h) => h.enabled && h.key).length;
@@ -186,6 +188,148 @@ export function RequestEditor() {
               onChange={(grpcMetadata) => updateActiveTab({ grpcMetadata })}
               keyPlaceholder="Metadata Key"
               valuePlaceholder="Metadata Value"
+            />
+          </TabsContent>
+        </div>
+      </Tabs>
+    );
+  }
+
+  if (isGraphql) {
+    return (
+      <Tabs defaultValue="query" className="flex flex-col h-full">
+        <TabsList className="h-auto shrink-0 gap-1 border-b border-border bg-[hsl(var(--surface-2))] p-1.5">
+          {[
+            { value: "query", label: "Query" },
+            { value: "headers", label: "Headers", count: enabledHeaders },
+            { value: "auth", label: "Auth" },
+          ].map((t) => (
+            <TabsTrigger
+              key={t.value}
+              value={t.value}
+              className="rounded-lg border border-transparent px-3 py-2 text-xs font-medium text-muted-foreground data-[state=active]:border-border/80 data-[state=active]:bg-[hsl(var(--surface-1))] data-[state=active]:text-foreground"
+            >
+              {t.label}
+              {"count" in t && t.count ? (
+                <span className="ml-1.5 bg-primary/20 text-primary text-[10px] font-bold rounded-full px-1.5 py-0">
+                  {t.count}
+                </span>
+              ) : null}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        <div className="flex-1 min-h-0 overflow-auto bg-[hsl(var(--surface-1))]">
+          <TabsContent value="query" className="m-0 h-full">
+            <div className="flex flex-col h-full">
+              <div className="flex-1 min-h-0 border-b border-border/60">
+                <div className="px-3 py-1.5 border-b border-border/40">
+                  <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                    Query
+                  </span>
+                </div>
+                <textarea
+                  className="h-[calc(100%-28px)] w-full resize-none bg-transparent p-3 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+                  placeholder={"query {\n  users {\n    id\n    name\n  }\n}"}
+                  value={tab.graphqlQuery}
+                  onChange={(e) => updateActiveTab({ graphqlQuery: e.target.value })}
+                  spellCheck={false}
+                />
+              </div>
+              <div className="h-[35%] shrink-0">
+                <div className="px-3 py-1.5 border-b border-border/40">
+                  <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                    Variables
+                  </span>
+                </div>
+                <textarea
+                  className="h-[calc(100%-28px)] w-full resize-none bg-transparent p-3 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+                  placeholder={'{\n  "id": 1\n}'}
+                  value={tab.graphqlVariables}
+                  onChange={(e) => updateActiveTab({ graphqlVariables: e.target.value })}
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="headers" className="m-0 h-full">
+            <KVEditor
+              items={tab.headers}
+              onChange={(headers) => updateActiveTab({ headers })}
+              keyPlaceholder="Header"
+              valuePlaceholder="Value"
+            />
+          </TabsContent>
+
+          <TabsContent value="auth" className="m-0 h-full">
+            <AuthEditor />
+          </TabsContent>
+        </div>
+      </Tabs>
+    );
+  }
+
+  if (isWebsocket) {
+    return (
+      <Tabs defaultValue="message" className="flex flex-col h-full">
+        <TabsList className="h-auto shrink-0 gap-1 border-b border-border bg-[hsl(var(--surface-2))] p-1.5">
+          {[
+            { value: "message", label: "Message" },
+            { value: "headers", label: "Headers", count: enabledHeaders },
+          ].map((t) => (
+            <TabsTrigger
+              key={t.value}
+              value={t.value}
+              className="rounded-lg border border-transparent px-3 py-2 text-xs font-medium text-muted-foreground data-[state=active]:border-border/80 data-[state=active]:bg-[hsl(var(--surface-1))] data-[state=active]:text-foreground"
+            >
+              {t.label}
+              {"count" in t && t.count ? (
+                <span className="ml-1.5 bg-primary/20 text-primary text-[10px] font-bold rounded-full px-1.5 py-0">
+                  {t.count}
+                </span>
+              ) : null}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        <div className="flex-1 min-h-0 overflow-auto bg-[hsl(var(--surface-1))]">
+          <TabsContent value="message" className="m-0 h-full">
+            <div className="flex flex-col h-full">
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  Message to send
+                </span>
+              </div>
+              <textarea
+                className="flex-1 w-full bg-transparent px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40 resize-none"
+                placeholder='{"type": "hello", "data": "world"}'
+                value={tab.wsMessage ?? ""}
+                onChange={(e) => updateActiveTab({ wsMessage: e.target.value })}
+                spellCheck={false}
+              />
+              <div className="px-3 py-2 border-t border-border/50">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-medium text-muted-foreground">
+                    Protocols
+                  </span>
+                  <input
+                    className="flex-1 bg-transparent font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+                    placeholder="Optional sub-protocols (comma-separated)"
+                    value={tab.wsProtocols ?? ""}
+                    onChange={(e) => updateActiveTab({ wsProtocols: e.target.value })}
+                  />
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="headers" className="m-0 h-full">
+            <KVEditor
+              items={tab.headers}
+              onChange={(headers) => updateActiveTab({ headers })}
+              keyPlaceholder="Header"
+              valuePlaceholder="Value"
             />
           </TabsContent>
         </div>
