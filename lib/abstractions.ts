@@ -141,10 +141,8 @@ function nowSecs(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-let nextId = 0;
-function genId(prefix: string): string {
-  nextId++;
-  return `${prefix}-${nextId}-${Math.random().toString(36).slice(2, 7)}`;
+function generateId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /** In-memory Database for local/browser use. */
@@ -241,7 +239,7 @@ export class InMemoryMessageQueue implements MessageQueue {
   async publish(tenant: TenantContext, topic: string, payload: unknown, _options?: PublishOptions): Promise<string> {
     const st = scopedKey(tenant, topic);
     const msg: QueueMessage = {
-      id: genId("msg"),
+      id: generateId("msg"),
       topic,
       payload,
       metadata: {},
@@ -254,7 +252,7 @@ export class InMemoryMessageQueue implements MessageQueue {
 
   async subscribe(tenant: TenantContext, topic: string): Promise<SubscriptionId> {
     const st = scopedKey(tenant, topic);
-    const subId = genId("sub");
+    const subId = generateId("sub");
     this.subscriptions.set(subId, [st]);
     return { id: subId };
   }
