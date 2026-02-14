@@ -69,10 +69,13 @@ impl Decoder for RawBytesDecoder {
 }
 
 pub fn compile_proto(proto_content: &str) -> Result<DescriptorPool, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let unique_id = format!(
         "{}-{}",
         std::process::id(),
-        Instant::now().elapsed().as_nanos()
+        COUNTER.fetch_add(1, Ordering::Relaxed)
     );
     let temp_dir = std::env::temp_dir().join(format!("getman-proto-{unique_id}"));
     fs::create_dir_all(&temp_dir)

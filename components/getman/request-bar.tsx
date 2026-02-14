@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useCallback, useRef } from "react"
+import React, { useEffect, useRef } from "react"
 
 import { Send, Loader2, X, Settings2, Copy, Check, Eye } from "lucide-react";
 import {
@@ -273,10 +273,10 @@ export function RequestBar() {
   // Global Cmd/Ctrl+Enter shortcut to send request
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        e.preventDefault();
-        sendRef.current?.();
-      }
+      // Only trigger on Cmd/Ctrl+Enter (modifier required)
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "Enter") return;
+      e.preventDefault();
+      sendRef.current?.();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
