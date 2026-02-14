@@ -1,12 +1,13 @@
 "use client";
 
-import React from "react"
+import React, { useEffect, useRef } from "react"
 
-import { Send, Loader2, X, Settings2 } from "lucide-react";
+import { Send, Loader2, X, Settings2, Copy, Check, Eye } from "lucide-react";
 import {
   useActiveTab,
   useGetmanStore,
   updateActiveTab,
+  updateActiveTabUrl,
   setResponse,
   setGrpcResponse,
   setIsLoading,
@@ -23,6 +24,7 @@ import {
 import { sendHttpRequest, cancelHttpRequest, sendGrpcRequest, parseProtoContent } from "@/lib/tauri";
 import { runAssertions } from "@/lib/assertions";
 import { isCurlCommand, parseCurlCommand } from "@/lib/curl-parser";
+import { generateCode } from "@/lib/code-generator";
 import { CodeGeneratorDialog } from "./code-generator-dialog";
 import {
   Select,
@@ -168,12 +170,128 @@ function RequestSettingsDialog() {
   );
 }
 
-export function RequestBar() {
-  const store = useGetmanStore();
+function PreviewResolvedDialog() {
   const tab = useActiveTab();
   if (!tab) return null;
 
+  const resolvedUrl = resolveEnvVariables(tab.url);
+  const resolvedHeaders: { key: string; value: string }[] = [];
+  for (const h of tab.headers) {
+    if (h.enabled && h.key) {
+      resolvedHeaders.push({
+        key: h.key,
+        value: resolveEnvVariables(h.value),
+      });
+    }
+  }
+  const resolvedParams: { key: string; value: string }[] = [];
+  for (const p of tab.params) {
+    if (p.enabled && p.key) {
+      resolvedParams.push({
+        key: p.key,
+        value: resolveEnvVariables(p.value),
+      });
+    }
+  }
+  const resolvedBody = tab.bodyContent
+    ? resolveEnvVariables(tab.bodyContent)
+    : undefined;
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          disabled={!tab.url.trim()}
+          className="flex h-11 items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors border-r border-border/80 disabled:cursor-not-allowed disabled:opacity-50"
+          title="Preview Resolved Request"
+        >
+          <Eye className="h-4 w-4" />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="bg-[hsl(var(--surface-1))] border-border sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle className="text-foreground text-sm">Resolved Request Preview</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 max-h-[400px] overflow-y-auto">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Method & URL</span>
+            <div className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground break-all">
+              <span className="font-bold">{tab.method}</span>{" "}
+              {resolvedUrl}
+            </div>
+          </div>
+
+          {resolvedParams.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Query Parameters</span>
+              <div className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs space-y-0.5">
+                {resolvedParams.map((p, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-primary font-medium">{p.key}:</span>
+                    <span className="text-foreground break-all">{p.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resolvedHeaders.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Headers</span>
+              <div className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs space-y-0.5">
+                {resolvedHeaders.map((h, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-primary font-medium">{h.key}:</span>
+                    <span className="text-foreground break-all">{h.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resolvedBody && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Body</span>
+              <pre className="rounded-md bg-[hsl(var(--surface-2))] px-3 py-2 font-mono text-xs text-foreground whitespace-pre-wrap break-all max-h-[200px] overflow-y-auto">
+                {resolvedBody}
+              </pre>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function RequestBar() {
+  const store = useGetmanStore();
+  const tab = useActiveTab();
+  const sendRef = useRef<(() => void) | null>(null);
+  const [curlCopied, setCurlCopied] = React.useState(false);
+
+  // Global Cmd/Ctrl+Enter shortcut to send request
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Only trigger on Cmd/Ctrl+Enter (modifier required)
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "Enter") return;
+      e.preventDefault();
+      sendRef.current?.();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  if (!tab) return null;
+
   const isGrpc = (tab.requestType ?? "http") === "grpc";
+
+  const handleCopyAsCurl = () => {
+    const curl = generateCode(tab, "curl");
+    navigator.clipboard.writeText(curl);
+    setCurlCopied(true);
+    setTimeout(() => setCurlCopied(false), 2000);
+  };
 
   const handleCancel = async () => {
     if (store.activeRequestId) {
@@ -396,6 +514,7 @@ export function RequestBar() {
   };
 
   const handleSend = isGrpc ? sendGrpc : sendRequest;
+  sendRef.current = handleSend;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -547,12 +666,34 @@ export function RequestBar() {
           className="h-11 flex-1 bg-transparent px-3 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
           placeholder={isGrpc ? "Enter gRPC server address (e.g., http://localhost:50051)" : "Enter request URL or paste cURL..."}
           value={tab.url}
-          onChange={(e) => updateActiveTab({ url: e.target.value })}
+          onChange={(e) => {
+            if (isGrpc) {
+              updateActiveTab({ url: e.target.value });
+            } else {
+              updateActiveTabUrl(e.target.value);
+            }
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
         />
 
         {!isGrpc && <RequestSettingsDialog />}
+        {!isGrpc && <PreviewResolvedDialog />}
+        {!isGrpc && (
+          <button
+            type="button"
+            onClick={handleCopyAsCurl}
+            disabled={!tab.url.trim()}
+            className="flex h-11 items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors border-r border-border/80 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Copy as cURL"
+          >
+            {curlCopied ? (
+              <Check className="h-4 w-4 text-primary" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+          </button>
+        )}
         {!isGrpc && <CodeGeneratorDialog />}
 
         {store.isLoading ? (
