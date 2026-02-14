@@ -285,6 +285,8 @@ export function RequestBar() {
   if (!tab) return null;
 
   const isGrpc = (tab.requestType ?? "http") === "grpc";
+  const isGraphql = (tab.requestType ?? "http") === "graphql";
+  const isWebsocket = (tab.requestType ?? "http") === "websocket";
 
   const handleCopyAsCurl = () => {
     const curl = generateCode(tab, "curl");
@@ -514,7 +516,93 @@ export function RequestBar() {
     }
   };
 
-  const handleSend = isGrpc ? sendGrpc : sendRequest;
+  const sendGraphqlRequest = async () => {
+    if (!tab.url.trim()) return;
+
+    const requestId = uid();
+    setIsLoading(true);
+    setActiveRequestId(requestId);
+    setResponse(null);
+    setAssertionResults([]);
+
+    try {
+      const resolvedUrl = resolveEnvVariables(tab.url);
+      const url = new URL(resolvedUrl);
+
+      // Build headers
+      const headers: Record<string, string> = {};
+      for (const h of tab.headers) {
+        if (h.enabled && h.key) {
+          headers[h.key] = resolveEnvVariables(h.value);
+        }
+      }
+
+      // Auth headers
+      if (tab.authType === "bearer" && tab.authToken) {
+        headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.authToken)}`;
+      } else if (tab.authType === "basic" && tab.authUsername) {
+        const encoded = btoa(
+          `${resolveEnvVariables(tab.authUsername)}:${resolveEnvVariables(tab.authPassword)}`
+        );
+        headers["Authorization"] = `Basic ${encoded}`;
+      } else if (tab.authType === "oauth2" && tab.oauth2AccessToken) {
+        headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.oauth2AccessToken)}`;
+      }
+
+      headers["Content-Type"] = headers["Content-Type"] || "application/json";
+      let variables = {};
+      try {
+        variables = JSON.parse(resolveEnvVariables(tab.graphqlVariables || "{}"));
+      } catch {
+        // Keep empty variables on parse error
+      }
+      const body = JSON.stringify({
+        query: resolveEnvVariables(tab.graphqlQuery),
+        variables,
+      });
+
+      const settings = tab.settings || defaultSettings();
+
+      const data = await sendHttpRequest({
+        url: url.toString(),
+        method: "POST",
+        headers,
+        body,
+        requestId,
+        timeoutMs: settings.timeoutMs > 0 ? settings.timeoutMs : undefined,
+        retryCount: settings.retryCount > 0 ? settings.retryCount : undefined,
+        retryDelayMs: settings.retryDelayMs,
+        proxyUrl: settings.proxyUrl || undefined,
+        verifySsl: settings.verifySsl,
+      });
+      setResponse(data);
+
+      addHistoryItem({
+        id: uid(),
+        method: "POST",
+        url: tab.url,
+        status: data.status,
+        time: data.time,
+        timestamp: Date.now(),
+        requestType: "graphql",
+      });
+    } catch {
+      setResponse({
+        status: 0,
+        statusText: "Network Error",
+        headers: {},
+        body: "Failed to connect. Check the URL and try again.",
+        time: 0,
+        size: 0,
+        contentType: "text/plain",
+      });
+    } finally {
+      setIsLoading(false);
+      setActiveRequestId(null);
+    }
+  };
+
+  const handleSend = isGrpc ? sendGrpc : isGraphql ? sendGraphqlRequest : sendRequest;
   sendRef.current = handleSend;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -525,7 +613,7 @@ export function RequestBar() {
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    if (isGrpc) return;
+    if (isGrpc || isGraphql || isWebsocket) return;
     const text = e.clipboardData.getData("text");
     if (isCurlCommand(text)) {
       e.preventDefault();
@@ -550,6 +638,8 @@ export function RequestBar() {
 
   const canSend = isGrpc
     ? tab.url.trim() && tab.grpcServiceName && tab.grpcMethodName
+    : isWebsocket
+    ? tab.url.trim()
     : tab.url.trim();
 
   const grpcServices = tab.grpcServices ?? [];
@@ -561,7 +651,7 @@ export function RequestBar() {
       {/* Protocol toggle */}
       <div className="flex items-center gap-2">
         <div className="flex items-center rounded-lg border border-border/60 overflow-hidden">
-          {(["http", "grpc"] as RequestType[]).map((type) => (
+          {(["http", "grpc", "graphql", "websocket"] as RequestType[]).map((type) => (
             <button
               key={type}
               type="button"
@@ -635,7 +725,7 @@ export function RequestBar() {
 
       {/* URL bar */}
       <div className="panel-inset flex items-center gap-0 overflow-hidden rounded-xl">
-        {!isGrpc && (
+        {!isGrpc && !isGraphql && !isWebsocket && (
           <Select
             value={tab.method}
             onValueChange={(v) => updateActiveTab({ method: v as HttpMethod })}
@@ -663,12 +753,29 @@ export function RequestBar() {
           </div>
         )}
 
+        {isGraphql && (
+          <div className="flex h-11 items-center px-3 border-r border-border/80">
+            <span className="font-mono text-sm font-bold text-pink-400">GQL</span>
+          </div>
+        )}
+
+        {isWebsocket && (
+          <div className="flex h-11 items-center px-3 border-r border-border/80">
+            <span className="font-mono text-sm font-bold text-emerald-400">WS</span>
+          </div>
+        )}
+
         <input
           className="h-11 flex-1 bg-transparent px-3 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
-          placeholder={isGrpc ? "Enter gRPC server address (e.g., http://localhost:50051)" : "Enter request URL or paste cURL..."}
+          placeholder={
+            isGrpc ? "Enter gRPC server address (e.g., http://localhost:50051)"
+            : isGraphql ? "Enter GraphQL endpoint URL (e.g., https://api.example.com/graphql)"
+            : isWebsocket ? "Enter WebSocket URL (e.g., ws://localhost:8080)"
+            : "Enter request URL or paste cURL..."
+          }
           value={tab.url}
           onChange={(e) => {
-            if (isGrpc) {
+            if (isGrpc || isGraphql || isWebsocket) {
               updateActiveTab({ url: e.target.value });
             } else {
               updateActiveTabUrl(e.target.value);
@@ -678,9 +785,9 @@ export function RequestBar() {
           onPaste={handlePaste}
         />
 
-        {!isGrpc && <RequestSettingsDialog />}
-        {!isGrpc && <PreviewResolvedDialog />}
-        {!isGrpc && (
+        {!isGrpc && !isGraphql && !isWebsocket && <RequestSettingsDialog />}
+        {!isGrpc && !isGraphql && !isWebsocket && <PreviewResolvedDialog />}
+        {!isGrpc && !isGraphql && !isWebsocket && (
           <button
             type="button"
             onClick={handleCopyAsCurl}
@@ -695,7 +802,7 @@ export function RequestBar() {
             )}
           </button>
         )}
-        {!isGrpc && <CodeGeneratorDialog />}
+        {!isGrpc && !isGraphql && !isWebsocket && <CodeGeneratorDialog />}
 
         {store.isLoading ? (
           <button
@@ -714,7 +821,7 @@ export function RequestBar() {
             className="flex h-11 items-center gap-2 bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Send className="h-4 w-4" />
-            Send
+            {isWebsocket ? "Connect" : "Send"}
           </button>
         )}
       </div>

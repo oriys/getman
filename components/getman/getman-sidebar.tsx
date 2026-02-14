@@ -488,7 +488,7 @@ function HistoryView() {
               role="button"
               tabIndex={0}
             >
-              <MethodBadge method={item.method} size="sm" />
+              <MethodBadge method={item.method} size="sm" requestType={item.requestType} />
               <div className="flex-1 min-w-0">
                 <p className="text-[11px] text-foreground/80 font-mono truncate">
                   {item.url.replace(/^https?:\/\//, "")}

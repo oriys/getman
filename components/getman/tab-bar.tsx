@@ -21,6 +21,8 @@ export function TabBar() {
           {tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
             const isGrpc = (tab.requestType ?? "http") === "grpc";
+            const isGraphql = (tab.requestType ?? "http") === "graphql";
+            const isWebsocket = (tab.requestType ?? "http") === "websocket";
             const displayText = isGrpc
               ? (tab.grpcMethodName || tab.url?.replace(/^https?:\/\//, "").slice(0, 30) || tab.name)
               : (tab.url ? tab.url.replace(/^https?:\/\//, "").slice(0, 30) : tab.name);
@@ -39,6 +41,14 @@ export function TabBar() {
                 {isGrpc ? (
                   <span className="font-mono font-bold text-purple-400 bg-purple-400/10 rounded px-1.5 text-[10px] py-0">
                     gRPC
+                  </span>
+                ) : isGraphql ? (
+                  <span className="font-mono font-bold text-pink-400 bg-pink-400/10 rounded px-1.5 text-[10px] py-0">
+                    GQL
+                  </span>
+                ) : isWebsocket ? (
+                  <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 rounded px-1.5 text-[10px] py-0">
+                    WS
                   </span>
                 ) : (
                   <MethodBadge method={tab.method} size="sm" />

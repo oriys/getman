@@ -14,7 +14,7 @@ export type HttpMethod =
   | "HEAD"
   | "OPTIONS";
 
-export type RequestType = "http" | "grpc";
+export type RequestType = "http" | "grpc" | "graphql" | "websocket";
 
 export interface KeyValue {
   id: string;
@@ -136,6 +136,9 @@ export interface RequestTab {
   grpcMetadata: KeyValue[];
   grpcServices: ProtoServiceInfo[];
   grpcDescriptorBytes: string;
+  // WebSocket fields
+  wsProtocols: string;
+  wsMessage: string;
 }
 
 export interface ResponseData {
@@ -509,6 +512,8 @@ export function createDefaultTab(): RequestTab {
     grpcMetadata: [createEmptyKV()],
     grpcServices: [],
     grpcDescriptorBytes: "",
+    wsProtocols: "",
+    wsMessage: "",
   };
 }
 
@@ -855,6 +860,9 @@ export function loadHistoryItem(item: HistoryItem) {
   tab.method = item.method;
   tab.url = item.url;
   tab.name = item.url.split("/").pop() || "Request";
+  if (item.requestType) {
+    tab.requestType = item.requestType;
+  }
   setState({
     tabs: [...state.tabs, tab],
     activeTabId: tab.id,
