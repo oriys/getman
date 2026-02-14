@@ -291,6 +291,9 @@ pub async fn send_grpc_request_impl(
 mod reflection_proto {
     use bytes::{BufMut, Bytes, BytesMut};
 
+    /// Maximum size for a single length-delimited field (10 MB)
+    const MAX_FIELD_SIZE: usize = 10 * 1024 * 1024;
+
     fn encode_varint(mut value: u64, buf: &mut BytesMut) {
         while value >= 0x80 {
             buf.put_u8((value as u8) | 0x80);
@@ -371,6 +374,9 @@ mod reflection_proto {
 
         fn read_bytes(&mut self) -> Result<&'a [u8], String> {
             let len = self.read_varint()? as usize;
+            if len > MAX_FIELD_SIZE {
+                return Err("Field size too large".into());
+            }
             if self.pos + len > self.data.len() {
                 return Err("Unexpected end of data reading bytes".into());
             }
@@ -583,8 +589,10 @@ pub async fn fetch_grpc_reflection_impl(
     }
 
     // 3. For each service, fetch file descriptors
+    const MAX_TOTAL_DESCRIPTOR_SIZE: usize = 100 * 1024 * 1024; // 100 MB
     let mut all_fd_bytes: Vec<Vec<u8>> = Vec::new();
     let mut seen_files = std::collections::HashSet::new();
+    let mut total_size: usize = 0;
 
     for service_name in &service_names {
         let req = reflection_proto::encode_file_containing_symbol_request(service_name);
@@ -639,6 +647,10 @@ pub async fn fetch_grpc_reflection_impl(
         };
 
         for fd in fd_bytes_list {
+            total_size += fd.len();
+            if total_size > MAX_TOTAL_DESCRIPTOR_SIZE {
+                return Err("Total descriptor size limit exceeded".into());
+            }
             // Deduplicate by content hash
             let hash = {
                 use std::hash::{Hash, Hasher};
