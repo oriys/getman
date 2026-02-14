@@ -387,9 +387,9 @@ mod reflection_proto {
         fn skip_field(&mut self, wire_type: u32) -> Result<(), String> {
             match wire_type {
                 0 => { self.read_varint()?; }
-                1 => { self.pos += 8; }
-                2 => { let _ = self.read_bytes()?; }
-                5 => { self.pos += 4; }
+                1 => self.pos += 8,
+                2 => { self.read_bytes()?; }
+                5 => self.pos += 4,
                 _ => return Err(format!("Unknown wire type: {wire_type}")),
             }
             Ok(())
@@ -575,10 +575,7 @@ pub async fn fetch_grpc_reflection_impl(
     // Filter out reflection services themselves
     let service_names: Vec<String> = service_names
         .into_iter()
-        .filter(|name| {
-            !name.starts_with("grpc.reflection.")
-                && !name.starts_with("grpc.health.")
-        })
+        .filter(|name| !name.starts_with("grpc.reflection.") && !name.starts_with("grpc.health."))
         .collect();
 
     if service_names.is_empty() {

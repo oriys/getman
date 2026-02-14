@@ -70,7 +70,7 @@ function GrpcProtoEditor() {
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50">
         <span className="text-[11px] font-medium text-muted-foreground">
-          Paste your .proto file content below, or use server reflection
+          Paste your .proto file content below or use Server Reflection
         </span>
         <div className="flex-1" />
         <button
