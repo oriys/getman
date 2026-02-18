@@ -371,7 +371,7 @@ export interface GetmanState {
   activeEnvironmentId: string | null;
   globalVariables: EnvVariable[];
   vaultSecrets: VaultSecret[];
-  sidebarView: "collections" | "history" | "environments" | "websocket" | "sse" | "cookies" | "plugins";
+  sidebarView: "requests" | "collections" | "history" | "environments" | "websocket" | "sse" | "cookies" | "plugins";
   sidebarOpen: boolean;
   assertionResults: AssertionResult[];
   cookieJar: CookieEntry[];
@@ -582,7 +582,7 @@ function createInitialState(): GetmanState {
     activeEnvironmentId: null,
     globalVariables: [],
     vaultSecrets: [],
-    sidebarView: "collections",
+    sidebarView: "requests",
     sidebarOpen: true,
     assertionResults: [],
     cookieJar: [],
@@ -620,6 +620,7 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
       : tabs[0].id;
 
   const sidebarView =
+    parsed.sidebarView === "requests" ||
     parsed.sidebarView === "collections" ||
     parsed.sidebarView === "history" ||
     parsed.sidebarView === "environments" ||
@@ -628,7 +629,7 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     parsed.sidebarView === "cookies" ||
     parsed.sidebarView === "plugins"
       ? parsed.sidebarView
-      : "collections";
+      : "requests";
 
   return {
     tabs,
@@ -778,6 +779,15 @@ export function updateActiveTab(partial: Partial<RequestTab>) {
 
 export function setActiveTabId(id: string) {
   setState({ activeTabId: id, response: null, grpcResponse: null });
+}
+
+export function renameTab(id: string, name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const tabs = state.tabs.map((tab) =>
+    tab.id === id ? { ...tab, name: trimmed } : tab
+  );
+  setState({ tabs });
 }
 
 export function addTab() {

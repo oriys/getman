@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Save } from "lucide-react";
 import {
   useGetmanStore,
@@ -23,17 +23,37 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export function SaveRequestDialog() {
+export const OPEN_SAVE_REQUEST_DIALOG_EVENT = "getman:open-save-request-dialog";
+
+interface SaveRequestDialogProps {
+  showTrigger?: boolean;
+}
+
+export function SaveRequestDialog({ showTrigger = true }: SaveRequestDialogProps) {
   const { collections } = useGetmanStore();
   const tab = useActiveTab();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [collectionId, setCollectionId] = useState(collections[0]?.id || "");
 
-  if (!tab) return null;
+  const openDialog = useCallback(() => {
+    if (!collectionId && collections[0]?.id) {
+      setCollectionId(collections[0].id);
+    }
+    if (!name.trim()) {
+      setName(tab?.name || "");
+    }
+    setOpen(true);
+  }, [collectionId, collections, name, tab?.name]);
+
+  useEffect(() => {
+    const handler = () => openDialog();
+    window.addEventListener(OPEN_SAVE_REQUEST_DIALOG_EVENT, handler);
+    return () => window.removeEventListener(OPEN_SAVE_REQUEST_DIALOG_EVENT, handler);
+  }, [openDialog]);
 
   const handleSave = () => {
-    if (!name.trim() || !collectionId) return;
+    if (!tab || !name.trim() || !collectionId) return;
     saveRequestToCollection(collectionId, {
       id: uid(),
       name: name.trim(),
@@ -45,18 +65,22 @@ export function SaveRequestDialog() {
     setOpen(false);
   };
 
+  if (!tab) return null;
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded-md border border-border bg-[hsl(var(--surface-1))] px-2.5 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          title="Save Request"
-        >
-          <Save className="h-3.5 w-3.5" />
-          Save
-        </button>
-      </DialogTrigger>
+      {showTrigger && (
+        <DialogTrigger asChild>
+          <button
+            type="button"
+            className="flex items-center gap-1.5 rounded-md border border-border bg-[hsl(var(--surface-1))] px-2.5 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            title="Save Request"
+          >
+            <Save className="h-3.5 w-3.5" />
+            Save
+          </button>
+        </DialogTrigger>
+      )}
       <DialogContent className="border-border bg-[hsl(var(--surface-1))] sm:max-w-[400px]">
         <DialogHeader>
           <DialogTitle className="text-foreground text-sm">

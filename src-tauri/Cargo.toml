@@ -27,6 +27,7 @@ tokio-stream = "0.1"
 base64 = "0.22"
 md5 = "0.7"
 ntlmclient = "0.1"
+hdrhistogram = "7"
 
 [profile.release]
 codegen-units = 1

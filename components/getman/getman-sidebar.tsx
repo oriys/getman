@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  FileText,
   FolderOpen,
   FolderPlus,
   History,
@@ -15,9 +16,15 @@ import {
   Search,
   Pencil,
   X,
+  Copy,
 } from "lucide-react";
 import {
   useGetmanStore,
+  setActiveTabId,
+  addTab,
+  duplicateTab,
+  closeTab,
+  renameTab,
   setSidebarView,
   loadSavedRequest,
   loadHistoryItem,
@@ -58,6 +65,7 @@ function SidebarNav() {
   const { sidebarView } = useGetmanStore();
 
   const navItems: { id: GetmanState["sidebarView"]; icon: typeof FolderOpen; label: string }[] = [
+    { id: "requests", icon: FileText, label: "Requests" },
     { id: "collections", icon: FolderOpen, label: "Collections" },
     { id: "environments", icon: Globe, label: "Environments" },
     { id: "cookies", icon: Cookie, label: "Cookies" },
@@ -84,6 +92,256 @@ function SidebarNav() {
           </span>
         </button>
       ))}
+    </div>
+  );
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  const tagName = element.tagName;
+  return (
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT" ||
+    element.isContentEditable
+  );
+}
+
+function RequestsView() {
+  const { tabs, activeTabId, sidebarView } = useGetmanStore();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [editingTabName, setEditingTabName] = useState("");
+
+  const filteredTabs = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return tabs;
+    return tabs.filter((tab) =>
+      tab.name.toLowerCase().includes(query) ||
+      tab.url.toLowerCase().includes(query) ||
+      tab.method.toLowerCase().includes(query) ||
+      (tab.requestType ?? "http").toLowerCase().includes(query)
+    );
+  }, [tabs, searchQuery]);
+
+  const beginRename = (tabId: string) => {
+    const tab = tabs.find((item) => item.id === tabId);
+    if (!tab) return;
+    setEditingTabId(tab.id);
+    setEditingTabName(tab.name);
+  };
+
+  const commitRename = () => {
+    if (!editingTabId) return;
+    if (editingTabName.trim()) {
+      renameTab(editingTabId, editingTabName.trim());
+    }
+    setEditingTabId(null);
+    setEditingTabName("");
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (sidebarView !== "requests") return;
+      if (isEditableTarget(event.target)) return;
+      const mod = event.metaKey || event.ctrlKey;
+      const activeIndex = filteredTabs.findIndex((tab) => tab.id === activeTabId);
+      const activeTab = tabs.find((tab) => tab.id === activeTabId);
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (filteredTabs.length === 0) return;
+        const nextIndex = activeIndex < 0
+          ? 0
+          : Math.min(filteredTabs.length - 1, activeIndex + 1);
+        setActiveTabId(filteredTabs[nextIndex].id);
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        if (filteredTabs.length === 0) return;
+        const nextIndex = activeIndex < 0 ? 0 : Math.max(0, activeIndex - 1);
+        setActiveTabId(filteredTabs[nextIndex].id);
+        return;
+      }
+
+      if (event.key === "F2") {
+        event.preventDefault();
+        if (activeTab) {
+          beginRename(activeTab.id);
+        }
+        return;
+      }
+
+      if (mod && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        if (activeTabId) {
+          duplicateTab(activeTabId);
+        }
+        return;
+      }
+
+      if ((mod && event.key.toLowerCase() === "w") || event.key === "Delete") {
+        event.preventDefault();
+        if (activeTabId) {
+          closeTab(activeTabId);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeTabId, filteredTabs, sidebarView, tabs]);
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between border-b border-border/60 bg-[hsl(var(--surface-1))] px-3 py-2">
+        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+          Requests
+        </span>
+        <button
+          type="button"
+          onClick={addTab}
+          className="text-muted-foreground hover:text-foreground transition-colors"
+          title="New Request (⌘/Ctrl+N)"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <div className="px-2 py-1.5 border-b border-border/40">
+        <div className="flex items-center gap-1.5 bg-[hsl(var(--surface-2))] rounded px-2 py-1">
+          <Search className="h-3 w-3 text-muted-foreground shrink-0" />
+          <input
+            className="flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground/50"
+            placeholder="Search requests..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="px-2 py-1 border-b border-border/40 text-[10px] text-muted-foreground">
+        ⌘/Ctrl+N new · ⌘/Ctrl+S save · ↑↓ switch · F2 rename · ⌘/Ctrl+D duplicate · ⌘/Ctrl+W delete
+      </div>
+
+      <ScrollArea className="flex-1">
+        <div className="py-1">
+          {filteredTabs.map((tab) => {
+            const isActive = tab.id === activeTabId;
+            const isEditing = editingTabId === tab.id;
+            const requestType = tab.requestType ?? "http";
+            const isGrpc = requestType === "grpc";
+            const isGraphql = requestType === "graphql";
+            const isWebsocket = requestType === "websocket";
+            const subtitle = isGrpc
+              ? `${tab.grpcServiceName || "service"}/${tab.grpcMethodName || "method"}`
+              : tab.url || "No URL";
+
+            return (
+              <div
+                key={tab.id}
+                className={`group px-2 py-1.5 border-b border-border/30 ${
+                  isActive ? "bg-[hsl(var(--surface-2))]" : "hover:bg-[hsl(var(--surface-2))]"
+                }`}
+              >
+                {isEditing ? (
+                  <input
+                    className="w-full bg-[hsl(var(--surface-1))] border border-primary/50 rounded text-xs text-foreground px-2 py-1 outline-none"
+                    value={editingTabName}
+                    onChange={(e) => setEditingTabName(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        commitRename();
+                      } else if (e.key === "Escape") {
+                        setEditingTabId(null);
+                        setEditingTabName("");
+                      }
+                    }}
+                    autoFocus
+                  />
+                ) : (
+                  <div className="flex items-start gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTabId(tab.id)}
+                      className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                    >
+                      <div className="pt-0.5">
+                        {isGrpc ? (
+                          <span className="font-mono font-bold text-purple-400 bg-purple-400/10 rounded px-1.5 text-[10px] py-0">
+                            gRPC
+                          </span>
+                        ) : isGraphql ? (
+                          <span className="font-mono font-bold text-pink-400 bg-pink-400/10 rounded px-1.5 text-[10px] py-0">
+                            GQL
+                          </span>
+                        ) : isWebsocket ? (
+                          <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 rounded px-1.5 text-[10px] py-0">
+                            WS
+                          </span>
+                        ) : (
+                          <MethodBadge method={tab.method} size="sm" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs text-foreground truncate">{tab.name}</div>
+                        <div className="text-[10px] text-muted-foreground truncate font-mono">{subtitle}</div>
+                      </div>
+                    </button>
+
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        onClick={() => beginRename(tab.id)}
+                        className="text-muted-foreground hover:text-foreground"
+                        title="Rename (F2)"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => duplicateTab(tab.id)}
+                        className="text-muted-foreground hover:text-foreground"
+                        title="Duplicate (⌘/Ctrl+D)"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
+                      {tabs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => closeTab(tab.id)}
+                          className="text-muted-foreground hover:text-destructive"
+                          title="Delete (⌘/Ctrl+W)"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {filteredTabs.length === 0 && (
+            <div className="px-4 py-8 text-center">
+              <p className="text-xs text-muted-foreground">No matching requests</p>
+            </div>
+          )}
+        </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -1047,6 +1305,7 @@ export function GetmanSidebar() {
       <SidebarNav />
       <div className="min-w-0 flex-1">
         <div className="h-full overflow-hidden bg-[hsl(var(--surface-1))]">
+          {sidebarView === "requests" && <RequestsView />}
           {sidebarView === "collections" && <CollectionsView />}
           {sidebarView === "history" && <HistoryView />}
           {sidebarView === "environments" && <EnvironmentsView />}

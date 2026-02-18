@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/resizable";
 import { hydrateStore, useGetmanStore, addTab, setCommandPaletteOpen } from "@/lib/getman-store";
 import { GetmanHeader } from "./getman-header";
-import { TabBar } from "./tab-bar";
 import { RequestBar } from "./request-bar";
 
 const GetmanSidebar = dynamic(
@@ -28,6 +27,7 @@ const SaveRequestDialog = dynamic(
   () => import("./save-request-dialog").then((mod) => mod.SaveRequestDialog),
   { ssr: false }
 );
+const OPEN_SAVE_REQUEST_DIALOG_EVENT = "getman:open-save-request-dialog";
 
 export function GetmanApp() {
   const { sidebarOpen } = useGetmanStore();
@@ -39,13 +39,17 @@ export function GetmanApp() {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
+    const key = e.key.toLowerCase();
 
-    if (e.key === "k") {
+    if (key === "k") {
       e.preventDefault();
       setCommandPaletteOpen(true);
-    } else if (e.key === "n") {
+    } else if (key === "n") {
       e.preventDefault();
       addTab();
+    } else if (key === "s") {
+      e.preventDefault();
+      window.dispatchEvent(new Event(OPEN_SAVE_REQUEST_DIALOG_EVENT));
     }
   }, []);
 
@@ -57,6 +61,7 @@ export function GetmanApp() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background">
       <GetmanHeader />
+      <SaveRequestDialog showTrigger={false} />
 
       <div className="flex flex-1 min-h-0">
         <div className="h-full w-full overflow-hidden border border-border bg-[hsl(var(--surface-1))]">
@@ -77,8 +82,6 @@ export function GetmanApp() {
 
             <ResizablePanel defaultSize={sidebarOpen ? 80 : 100}>
               <div className="flex h-full flex-col">
-                <TabBar />
-
                 <div className="flex-1 min-h-0">
                   <ResizablePanelGroup direction="vertical">
                     {/* Request Section */}
@@ -89,7 +92,6 @@ export function GetmanApp() {
                             <div className="flex-1">
                               <RequestBar />
                             </div>
-                            <SaveRequestDialog />
                           </div>
                         </div>
                         <div className="flex-1 min-h-0 border-b border-border/70">

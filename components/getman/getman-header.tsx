@@ -23,6 +23,10 @@ const CollectionRunnerDialog = dynamic(
   () => import("./collection-runner-dialog").then((mod) => mod.CollectionRunnerDialog),
   { ssr: false }
 );
+const BenchmarkDialog = dynamic(
+  () => import("./benchmark-dialog").then((mod) => mod.BenchmarkDialog),
+  { ssr: false }
+);
 
 export function GetmanHeader() {
   const { sidebarOpen, environments, activeEnvironmentId } = useGetmanStore();
@@ -59,6 +63,7 @@ export function GetmanHeader() {
       <div className="flex items-center gap-1 ml-2">
         <ImportExportDialog />
         <CollectionRunnerDialog />
+        <BenchmarkDialog />
       </div>
 
       <div className="flex-1" />
