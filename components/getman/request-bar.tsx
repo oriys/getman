@@ -19,6 +19,8 @@ import {
   addWsMessage,
   removeWsConnection,
   resolveEnvVariables,
+  getVariableScopeSnapshot,
+  findSavedRequestScopeByTab,
   addCookieEntry,
   uid,
   type AssertionResult,
@@ -26,7 +28,9 @@ import {
   type KeyValue,
   type CookieEntry,
   type RequestSettings,
+  type RequestTab,
   type RequestType,
+  type ResponseData,
   defaultSettings,
 } from "@/lib/getman-store";
 import {
@@ -41,6 +45,7 @@ import { generateCode } from "@/lib/code-generator";
 import {
   executePreRequestScript,
   executePostResponseScript,
+  type ScriptExecutionLog,
 } from "@/lib/request-scripts";
 import { applyAdvancedAuth } from "@/lib/advanced-auth";
 import { CodeGeneratorDialog } from "./code-generator-dialog";
@@ -282,6 +287,173 @@ function formatWebSocketMessage(data: unknown): string {
     return `[binary ${data.byteLength} bytes]`;
   }
   return String(data);
+}
+
+function variablesToMap(variables: Array<{ key: string; value: string; enabled: boolean }> = []): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const variable of variables) {
+    if (variable.enabled && variable.key) {
+      map[variable.key] = variable.value;
+    }
+  }
+  return map;
+}
+
+function buildScopedResolver(
+  tab: RequestTab,
+  runtimeVariables: Record<string, string>
+): {
+  resolve: (value: string) => string;
+  preScripts: string[];
+  postScripts: string[];
+  context: {
+    requestName: string;
+    globalVariables: Record<string, string>;
+    environmentVariables: Record<string, string>;
+    collectionVariables: Record<string, string>;
+    requestVariables: Record<string, string>;
+    runtimeVariables: Record<string, string>;
+  };
+} {
+  const scope = findSavedRequestScopeByTab(tab);
+  const variableScope = getVariableScopeSnapshot();
+  const collectionVariables = variablesToMap(scope?.collection.variables);
+  const requestVariables = variablesToMap(tab.variables || []);
+  const folderVariables = scope?.folderChain.map((folder) => folder.variables || []) || [];
+  const mergedFolderVariables = folderVariables.reduce<Record<string, string>>((acc, items) => {
+    for (const item of items) {
+      if (item.enabled && item.key) {
+        acc[item.key] = item.value;
+      }
+    }
+    return acc;
+  }, {});
+
+  const resolve = (value: string) =>
+    resolveEnvVariables(value, {
+      collectionVariables: scope?.collection.variables,
+      folderVariables,
+      requestVariables: tab.variables,
+      runtimeVariables,
+    });
+
+  const preScripts = [
+    scope?.collection.preRequestScript || "",
+    ...(scope?.folderChain.map((folder) => folder.preRequestScript || "") || []),
+    tab.preRequestScript || "",
+  ].filter((script) => script.trim());
+
+  const postScripts = [
+    scope?.collection.testScript || "",
+    ...(scope?.folderChain.map((folder) => folder.testScript || "") || []),
+    tab.testScript || "",
+  ].filter((script) => script.trim());
+
+  return {
+    resolve,
+    preScripts,
+    postScripts,
+    context: {
+      requestName: tab.name,
+      globalVariables: variableScope.globalVariables,
+      environmentVariables: variableScope.environmentVariables,
+      collectionVariables: {
+        ...collectionVariables,
+        ...mergedFolderVariables,
+      },
+      requestVariables,
+      runtimeVariables,
+    },
+  };
+}
+
+function exampleMatchesMockRequest(
+  tags: string[],
+  request: { method: string; url: string; headers: Record<string, string>; body?: string }
+): boolean {
+  if (tags.length === 0) return true;
+  let parsedUrl: URL | null = null;
+  try {
+    parsedUrl = new URL(request.url);
+  } catch {
+    parsedUrl = null;
+  }
+
+  for (const tag of tags) {
+    if (tag.startsWith("method:")) {
+      const expected = tag.slice("method:".length).trim().toUpperCase();
+      if (expected && request.method.toUpperCase() !== expected) return false;
+      continue;
+    }
+    if (tag.startsWith("path:")) {
+      const expected = tag.slice("path:".length).trim();
+      if (expected && (!parsedUrl || parsedUrl.pathname !== expected)) return false;
+      continue;
+    }
+    if (tag.startsWith("query:")) {
+      const segment = tag.slice("query:".length).trim();
+      const [key, value] = segment.split("=");
+      if (!key || !parsedUrl) return false;
+      if ((parsedUrl.searchParams.get(key) || "") !== (value || "")) return false;
+      continue;
+    }
+    if (tag.startsWith("header:")) {
+      const segment = tag.slice("header:".length).trim();
+      const [key, value] = segment.split("=");
+      if (!key) return false;
+      const found = Object.entries(request.headers).find(
+        ([headerName]) => headerName.toLowerCase() === key.toLowerCase()
+      );
+      if (!found) return false;
+      if (value !== undefined && found[1] !== value) return false;
+      continue;
+    }
+    if (tag.startsWith("body~")) {
+      const keyword = tag.slice("body~".length).trim();
+      if (keyword && !(request.body || "").includes(keyword)) return false;
+      continue;
+    }
+  }
+
+  return true;
+}
+
+function getActiveMockExample(
+  tab: RequestTab,
+  request: { method: string; url: string; headers: Record<string, string>; body?: string }
+) {
+  const examples = tab.examples || [];
+  if (examples.length === 0) return null;
+  const matched = examples.filter((example) => exampleMatchesMockRequest(example.tags, request));
+  if (matched.length === 0) return null;
+  return (
+    matched.find((example) => example.id === tab.selectedExampleId) ||
+    matched.find((example) => example.isDefault) ||
+    matched[0]
+  );
+}
+
+function buildMockResponse(
+  tab: RequestTab,
+  request: { method: string; url: string; headers: Record<string, string>; body?: string }
+): ResponseData | null {
+  const example = getActiveMockExample(tab, request);
+  if (!tab.useMockExamples || !example) return null;
+  const contentType = example.contentType || example.headers["Content-Type"] || "application/json";
+  return {
+    status: example.statusCode,
+    statusText: "Mock Example",
+    headers: {
+      "x-getman-mock-source": "example",
+      "x-getman-mock-name": example.name,
+      "content-type": contentType,
+      ...example.headers,
+    },
+    body: example.body,
+    time: Math.max(0, example.delayMs || 0),
+    size: new TextEncoder().encode(example.body || "").length,
+    contentType,
+  };
 }
 
 function RequestSettingsDialog() {
@@ -776,21 +948,25 @@ export function RequestBar() {
     setAssertionResults([]);
 
     try {
-      const resolvedUrl = resolveEnvVariables(tab.url);
+      const runtimeVariables: Record<string, string> = {};
+      const scoped = buildScopedResolver(tab, runtimeVariables);
+      const resolve = scoped.resolve;
+      const scriptLogs: ScriptExecutionLog[] = [];
+      const resolvedUrl = resolve(tab.url);
 
       // Build query params
       const url = new URL(resolvedUrl);
       for (const p of tab.params) {
         if (p.enabled && p.key) {
-          url.searchParams.set(p.key, resolveEnvVariables(p.value));
+          url.searchParams.set(resolve(p.key), resolve(p.value));
         }
       }
 
       // Auth query params
       if (tab.authType === "api-key" && tab.authApiAddTo === "query") {
         url.searchParams.set(
-          resolveEnvVariables(tab.authApiKey),
-          resolveEnvVariables(tab.authApiValue)
+          resolve(tab.authApiKey),
+          resolve(tab.authApiValue)
         );
       }
 
@@ -798,7 +974,7 @@ export function RequestBar() {
       const headers: Record<string, string> = {};
       for (const h of tab.headers) {
         if (h.enabled && h.key) {
-          headers[h.key] = resolveEnvVariables(h.value);
+          headers[resolve(h.key)] = resolve(h.value);
         }
       }
 
@@ -814,21 +990,21 @@ export function RequestBar() {
 
       // Auth headers
       if (tab.authType === "bearer" && tab.authToken) {
-        headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.authToken)}`;
+        headers["Authorization"] = `Bearer ${resolve(tab.authToken)}`;
       } else if (tab.authType === "basic" && tab.authUsername) {
         const encoded = btoa(
-          `${resolveEnvVariables(tab.authUsername)}:${resolveEnvVariables(tab.authPassword)}`
+          `${resolve(tab.authUsername)}:${resolve(tab.authPassword)}`
         );
         headers["Authorization"] = `Basic ${encoded}`;
       } else if (
         tab.authType === "api-key" &&
         tab.authApiAddTo === "header"
       ) {
-        headers[resolveEnvVariables(tab.authApiKey)] = resolveEnvVariables(
+        headers[resolve(tab.authApiKey)] = resolve(
           tab.authApiValue
         );
       } else if (tab.authType === "oauth2" && tab.oauth2AccessToken) {
-        headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.oauth2AccessToken)}`;
+        headers["Authorization"] = `Bearer ${resolve(tab.oauth2AccessToken)}`;
       }
 
       // Build body
@@ -836,23 +1012,23 @@ export function RequestBar() {
       if (!["GET", "HEAD", "OPTIONS"].includes(tab.method)) {
         if (tab.bodyType === "json") {
           headers["Content-Type"] = headers["Content-Type"] || "application/json";
-          body = resolveEnvVariables(tab.bodyContent);
+          body = resolve(tab.bodyContent);
         } else if (tab.bodyType === "raw") {
-          body = resolveEnvVariables(tab.bodyContent);
+          body = resolve(tab.bodyContent);
         } else if (tab.bodyType === "x-www-form-urlencoded") {
           headers["Content-Type"] =
             headers["Content-Type"] || "application/x-www-form-urlencoded";
           const params = new URLSearchParams();
           for (const f of tab.bodyFormData) {
             if (f.enabled && f.key)
-              params.set(f.key, resolveEnvVariables(f.value));
+              params.set(resolve(f.key), resolve(f.value));
           }
           body = params.toString();
         } else if (tab.bodyType === "form-data") {
           // form-data sent as JSON key-values for proxy
           const obj: Record<string, string> = {};
           for (const f of tab.bodyFormData) {
-            if (f.enabled && f.key) obj[f.key] = resolveEnvVariables(f.value);
+            if (f.enabled && f.key) obj[resolve(f.key)] = resolve(f.value);
           }
           headers["Content-Type"] = headers["Content-Type"] || "application/json";
           body = JSON.stringify(obj);
@@ -860,12 +1036,12 @@ export function RequestBar() {
           headers["Content-Type"] = headers["Content-Type"] || "application/json";
           let variables = {};
           try {
-            variables = JSON.parse(resolveEnvVariables(tab.graphqlVariables || "{}"));
+            variables = JSON.parse(resolve(tab.graphqlVariables || "{}"));
           } catch {
             // Keep empty variables on parse error
           }
           body = JSON.stringify({
-            query: resolveEnvVariables(tab.graphqlQuery),
+            query: resolve(tab.graphqlQuery),
             variables,
           });
         } else if (tab.bodyType === "binary") {
@@ -889,10 +1065,29 @@ export function RequestBar() {
         verifySsl: settings.verifySsl,
       };
 
-      payload = executePreRequestScript(tab.preRequestScript || "", payload);
+      for (const [index, script] of scoped.preScripts.entries()) {
+        payload = executePreRequestScript(script, payload, {
+          ...scoped.context,
+          runtimeVariables,
+          logs: scriptLogs,
+          scriptName: `pre-request-${index + 1}`,
+        });
+      }
       payload = await applyAdvancedAuth(payload, tab);
 
-      const data = await sendHttpRequest(payload);
+      let data = buildMockResponse(tab, {
+        method: payload.method,
+        url: payload.url,
+        headers: payload.headers,
+        body: payload.body,
+      });
+      if (data && data.time > 0) {
+        const delayMs = data.time;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+      }
+      if (!data) {
+        data = await sendHttpRequest(payload);
+      }
       setResponse(data);
       persistCookiesFromResponse(data.headers, new URL(payload.url));
 
@@ -900,18 +1095,26 @@ export function RequestBar() {
       if (tab.assertions && tab.assertions.length > 0) {
         results.push(...runAssertions(tab.assertions, data));
       }
-      results.push(
-        ...executePostResponseScript(
-          tab.testScript || "",
-          {
-            method: payload.method,
-            url: payload.url,
-            headers: payload.headers,
-            body: payload.body,
-          },
-          data
-        )
-      );
+      for (const [index, script] of scoped.postScripts.entries()) {
+        results.push(
+          ...executePostResponseScript(
+            script,
+            {
+              method: payload.method,
+              url: payload.url,
+              headers: payload.headers,
+              body: payload.body,
+            },
+            data,
+            {
+              ...scoped.context,
+              runtimeVariables,
+              logs: scriptLogs,
+              scriptName: `post-response-${index + 1}`,
+            }
+          )
+        );
+      }
       setAssertionResults(results);
 
       addHistoryItem({
@@ -952,27 +1155,31 @@ export function RequestBar() {
     setAssertionResults([]);
 
     try {
-      const resolvedUrl = resolveEnvVariables(tab.url);
+      const runtimeVariables: Record<string, string> = {};
+      const scoped = buildScopedResolver(tab, runtimeVariables);
+      const resolve = scoped.resolve;
+      const scriptLogs: ScriptExecutionLog[] = [];
+      const resolvedUrl = resolve(tab.url);
       const url = new URL(resolvedUrl);
 
       // Build headers
       const headers: Record<string, string> = {};
       for (const h of tab.headers) {
         if (h.enabled && h.key) {
-          headers[h.key] = resolveEnvVariables(h.value);
+          headers[resolve(h.key)] = resolve(h.value);
         }
       }
 
       // Auth headers
       if (tab.authType === "bearer" && tab.authToken) {
-        headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.authToken)}`;
+        headers["Authorization"] = `Bearer ${resolve(tab.authToken)}`;
       } else if (tab.authType === "basic" && tab.authUsername) {
         const encoded = btoa(
-          `${resolveEnvVariables(tab.authUsername)}:${resolveEnvVariables(tab.authPassword)}`
+          `${resolve(tab.authUsername)}:${resolve(tab.authPassword)}`
         );
         headers["Authorization"] = `Basic ${encoded}`;
       } else if (tab.authType === "oauth2" && tab.oauth2AccessToken) {
-        headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.oauth2AccessToken)}`;
+        headers["Authorization"] = `Bearer ${resolve(tab.oauth2AccessToken)}`;
       }
 
       const cookieHeader = buildCookieHeaderValue(
@@ -987,12 +1194,12 @@ export function RequestBar() {
       headers["Content-Type"] = headers["Content-Type"] || "application/json";
       let variables = {};
       try {
-        variables = JSON.parse(resolveEnvVariables(tab.graphqlVariables || "{}"));
+        variables = JSON.parse(resolve(tab.graphqlVariables || "{}"));
       } catch {
         // Keep empty variables on parse error
       }
       const body = JSON.stringify({
-        query: resolveEnvVariables(tab.graphqlQuery),
+        query: resolve(tab.graphqlQuery),
         variables,
       });
 
@@ -1011,23 +1218,53 @@ export function RequestBar() {
         verifySsl: settings.verifySsl,
       };
 
-      payload = executePreRequestScript(tab.preRequestScript || "", payload);
+      for (const [index, script] of scoped.preScripts.entries()) {
+        payload = executePreRequestScript(script, payload, {
+          ...scoped.context,
+          runtimeVariables,
+          logs: scriptLogs,
+          scriptName: `pre-request-${index + 1}`,
+        });
+      }
       payload = await applyAdvancedAuth(payload, tab);
 
-      const data = await sendHttpRequest(payload);
+      let data = buildMockResponse(tab, {
+        method: payload.method,
+        url: payload.url,
+        headers: payload.headers,
+        body: payload.body,
+      });
+      if (data && data.time > 0) {
+        const delayMs = data.time;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+      }
+      if (!data) {
+        data = await sendHttpRequest(payload);
+      }
       setResponse(data);
       persistCookiesFromResponse(data.headers, new URL(payload.url));
 
-      const results = executePostResponseScript(
-        tab.testScript || "",
-        {
-          method: payload.method,
-          url: payload.url,
-          headers: payload.headers,
-          body: payload.body,
-        },
-        data
-      );
+      const results: AssertionResult[] = [];
+      for (const [index, script] of scoped.postScripts.entries()) {
+        results.push(
+          ...executePostResponseScript(
+            script,
+            {
+              method: payload.method,
+              url: payload.url,
+              headers: payload.headers,
+              body: payload.body,
+            },
+            data,
+            {
+              ...scoped.context,
+              runtimeVariables,
+              logs: scriptLogs,
+              scriptName: `post-response-${index + 1}`,
+            }
+          )
+        );
+      }
       setAssertionResults(results);
 
       addHistoryItem({

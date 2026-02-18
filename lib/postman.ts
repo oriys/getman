@@ -13,10 +13,11 @@ import {
   type RequestTab,
   type KeyValue,
   type HttpMethod,
+  type EnvVariable,
+  type RequestExample,
   uid,
   createEmptyKV,
   createDefaultTab,
-  defaultSettings,
 } from "./getman-store";
 
 // ─── Postman v2.1 Types ──────────────────────────────────────────────────────
@@ -30,13 +31,16 @@ interface PostmanCollection {
   };
   item: PostmanItem[];
   variable?: PostmanVariable[];
+  event?: PostmanEvent[];
 }
 
 interface PostmanItem {
   name: string;
   item?: PostmanItem[];
   request?: PostmanRequest;
-  response?: unknown[];
+  response?: PostmanResponse[];
+  variable?: PostmanVariable[];
+  event?: PostmanEvent[];
 }
 
 interface PostmanRequest {
@@ -98,6 +102,22 @@ interface PostmanAuth {
 interface PostmanVariable {
   key: string;
   value: string;
+  disabled?: boolean;
+}
+
+interface PostmanEvent {
+  listen: "prerequest" | "test" | string;
+  script?: {
+    exec?: string[] | string;
+  };
+}
+
+interface PostmanResponse {
+  name?: string;
+  status?: string;
+  code?: number;
+  header?: PostmanHeader[];
+  body?: string;
 }
 
 // ─── Import ──────────────────────────────────────────────────────────────────
@@ -224,6 +244,55 @@ function parsePostmanAuth(auth?: PostmanAuth): Pick<RequestTab, "authType" | "au
   }
 }
 
+function parsePostmanVariables(variables?: PostmanVariable[]): EnvVariable[] {
+  if (!Array.isArray(variables)) return [];
+  return variables.map((item) => ({
+    id: uid(),
+    key: item.key || "",
+    value: item.value || "",
+    enabled: !item.disabled,
+  }));
+}
+
+function parsePostmanEvents(events?: PostmanEvent[]): { preRequestScript: string; testScript: string } {
+  let preRequestScript = "";
+  let testScript = "";
+  for (const event of events || []) {
+    const exec = event.script?.exec;
+    const script = Array.isArray(exec) ? exec.join("\n") : typeof exec === "string" ? exec : "";
+    if (!script.trim()) continue;
+    if (event.listen === "prerequest") {
+      preRequestScript = preRequestScript ? `${preRequestScript}\n${script}` : script;
+    } else if (event.listen === "test") {
+      testScript = testScript ? `${testScript}\n${script}` : script;
+    }
+  }
+  return { preRequestScript, testScript };
+}
+
+function parsePostmanResponses(responses?: PostmanResponse[]): RequestExample[] {
+  if (!Array.isArray(responses)) return [];
+  return responses.map((response, index) => {
+    const headers: Record<string, string> = {};
+    for (const header of response.header || []) {
+      if (header.key) {
+        headers[header.key] = header.value || "";
+      }
+    }
+    return {
+      id: uid(),
+      name: response.name || response.status || `Example ${index + 1}`,
+      statusCode: response.code ?? 200,
+      headers,
+      body: response.body || "",
+      delayMs: 0,
+      tags: [],
+      isDefault: index === 0,
+      contentType: headers["Content-Type"] || headers["content-type"] || "application/json",
+    };
+  });
+}
+
 function postmanItemToRequest(item: PostmanItem): SavedRequest | null {
   if (!item.request) return null;
 
@@ -233,6 +302,8 @@ function postmanItemToRequest(item: PostmanItem): SavedRequest | null {
   const headers = parsePostmanHeaders(req.header);
   const bodyParts = parsePostmanBody(req.body);
   const authParts = parsePostmanAuth(req.auth);
+  const events = parsePostmanEvents(item.event);
+  const examples = parsePostmanResponses(item.response);
 
   const tab: RequestTab = {
     ...createDefaultTab(),
@@ -243,6 +314,11 @@ function postmanItemToRequest(item: PostmanItem): SavedRequest | null {
     headers,
     ...bodyParts,
     ...authParts,
+    preRequestScript: events.preRequestScript,
+    testScript: events.testScript,
+    examples,
+    useMockExamples: false,
+    selectedExampleId: examples.find((example) => example.isDefault)?.id || null,
   };
 
   return {
@@ -262,11 +338,15 @@ function postmanItemsToFolder(items: PostmanItem[]): { requests: SavedRequest[];
     if (item.item) {
       // This is a folder
       const sub = postmanItemsToFolder(item.item);
+      const folderEvents = parsePostmanEvents(item.event);
       folders.push({
         id: uid(),
         name: item.name,
         requests: sub.requests,
         folders: sub.folders,
+        variables: parsePostmanVariables(item.variable),
+        preRequestScript: folderEvents.preRequestScript,
+        testScript: folderEvents.testScript,
       });
     } else {
       const req = postmanItemToRequest(item);
@@ -285,12 +365,17 @@ export function importPostmanCollection(json: string): Collection {
   }
 
   const { requests, folders } = postmanItemsToFolder(data.item);
+  const events = parsePostmanEvents(data.event);
 
   return {
     id: uid(),
     name: data.info.name || "Imported Collection",
     requests,
     folders,
+    variables: parsePostmanVariables(data.variable),
+    preRequestScript: events.preRequestScript,
+    testScript: events.testScript,
+    sourceType: "postman",
   };
 }
 
@@ -369,10 +454,58 @@ function tabToPostmanRequest(tab: RequestTab): PostmanRequest {
   };
 }
 
+function variablesToPostman(variables?: EnvVariable[]): PostmanVariable[] | undefined {
+  const items = (variables || [])
+    .filter((variable) => variable.key)
+    .map((variable) => ({
+      key: variable.key,
+      value: variable.value,
+      disabled: !variable.enabled,
+    }));
+  return items.length > 0 ? items : undefined;
+}
+
+function scriptsToPostmanEvents(
+  preRequestScript?: string,
+  testScript?: string
+): PostmanEvent[] | undefined {
+  const events: PostmanEvent[] = [];
+  if (preRequestScript?.trim()) {
+    events.push({
+      listen: "prerequest",
+      script: { exec: preRequestScript.split("\n") },
+    });
+  }
+  if (testScript?.trim()) {
+    events.push({
+      listen: "test",
+      script: { exec: testScript.split("\n") },
+    });
+  }
+  return events.length > 0 ? events : undefined;
+}
+
+function examplesToPostmanResponses(examples?: RequestExample[]): PostmanResponse[] | undefined {
+  const items = (examples || []).map((example) => ({
+    name: example.name,
+    status: String(example.statusCode),
+    code: example.statusCode,
+    header: Object.entries(example.headers || {}).map(([key, value]) => ({
+      key,
+      value,
+      disabled: false,
+    })),
+    body: example.body,
+  }));
+  return items.length > 0 ? items : undefined;
+}
+
 function savedRequestToPostmanItem(req: SavedRequest): PostmanItem {
   return {
     name: req.name,
     request: tabToPostmanRequest(req.tab),
+    response: examplesToPostmanResponses(req.tab.examples),
+    event: scriptsToPostmanEvents(req.tab.preRequestScript, req.tab.testScript),
   };
 }
 
@@ -383,6 +516,8 @@ function folderToPostmanItems(folder: CollectionFolder): PostmanItem {
       ...folder.folders.map(folderToPostmanItems),
       ...folder.requests.map(savedRequestToPostmanItem),
     ],
+    variable: variablesToPostman(folder.variables),
+    event: scriptsToPostmanEvents(folder.preRequestScript, folder.testScript),
   };
 }
 
@@ -397,6 +532,8 @@ export function exportPostmanCollection(collection: Collection): string {
       ...collection.folders.map(folderToPostmanItems),
       ...collection.requests.map(savedRequestToPostmanItem),
     ],
+    variable: variablesToPostman(collection.variables),
+    event: scriptsToPostmanEvents(collection.preRequestScript, collection.testScript),
   };
 
   return JSON.stringify(postman, null, 2);

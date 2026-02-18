@@ -53,6 +53,18 @@ export interface RequestSettings {
   verifySsl: boolean;
 }
 
+export interface RequestExample {
+  id: string;
+  name: string;
+  statusCode: number;
+  headers: Record<string, string>;
+  body: string;
+  delayMs: number;
+  tags: string[];
+  isDefault: boolean;
+  contentType: string;
+}
+
 // ─── Collection Folders ───────────────────────────────────────────────────────
 
 export interface CollectionFolder {
@@ -60,6 +72,9 @@ export interface CollectionFolder {
   name: string;
   folders: CollectionFolder[];
   requests: SavedRequest[];
+  variables?: EnvVariable[];
+  preRequestScript?: string;
+  testScript?: string;
 }
 
 // ─── OAuth2 ───────────────────────────────────────────────────────────────────
@@ -148,6 +163,14 @@ export interface RequestTab {
   // Scripts
   preRequestScript: string;
   testScript: string;
+  // Request scoped variables and examples
+  variables: EnvVariable[];
+  examples: RequestExample[];
+  useMockExamples: boolean;
+  selectedExampleId: string | null;
+  sourceCollectionId?: string;
+  sourceFolderPath?: string[];
+  sourceRequestId?: string;
   // Flow orchestrator fields
   flowDependsOn: string;
   flowCondition: string;
@@ -198,6 +221,12 @@ export interface Collection {
   name: string;
   requests: SavedRequest[];
   folders: CollectionFolder[];
+  variables?: EnvVariable[];
+  preRequestScript?: string;
+  testScript?: string;
+  sourceType?: "manual" | "postman" | "openapi";
+  sourceHash?: string;
+  contractFingerprint?: Record<string, string>;
 }
 
 export interface SavedRequest {
@@ -219,6 +248,13 @@ export interface Environment {
   id: string;
   name: string;
   variables: EnvVariable[];
+}
+
+export interface VariableScopeContext {
+  collectionVariables?: EnvVariable[];
+  folderVariables?: EnvVariable[][];
+  requestVariables?: EnvVariable[];
+  runtimeVariables?: Record<string, string>;
 }
 
 export interface VaultSecret {
@@ -544,6 +580,13 @@ export function createDefaultTab(): RequestTab {
     assertions: [],
     preRequestScript: "",
     testScript: "",
+    variables: [],
+    examples: [],
+    useMockExamples: false,
+    selectedExampleId: null,
+    sourceCollectionId: undefined,
+    sourceFolderPath: [],
+    sourceRequestId: undefined,
     flowDependsOn: "",
     flowCondition: "",
     grpcProtoContent: "",
@@ -566,6 +609,129 @@ const PERSISTED_STATE_VERSION = 1;
 const MAX_RESPONSE_SNAPSHOTS = 50;
 const MAX_WS_MESSAGES = 500;
 const MAX_SSE_EVENTS = 500;
+
+function normalizeEnvVariables(variables: EnvVariable[] | undefined): EnvVariable[] {
+  if (!Array.isArray(variables)) return [];
+  return variables
+    .map((variable) => ({
+      id: variable.id || uid(),
+      key: variable.key || "",
+      value: variable.value || "",
+      enabled: variable.enabled ?? true,
+    }))
+    .filter((variable) => variable.key || variable.value);
+}
+
+function normalizeRequestExamples(examples: RequestExample[] | undefined): RequestExample[] {
+  if (!Array.isArray(examples)) return [];
+  return examples.map((example) => ({
+    id: example.id || uid(),
+    name: example.name || "Example",
+    statusCode:
+      typeof example.statusCode === "number" && Number.isFinite(example.statusCode)
+        ? example.statusCode
+        : 200,
+    headers: example.headers && typeof example.headers === "object" ? example.headers : {},
+    body: example.body || "",
+    delayMs: typeof example.delayMs === "number" ? Math.max(0, example.delayMs) : 0,
+    tags: Array.isArray(example.tags) ? example.tags.filter(Boolean) : [],
+    isDefault: Boolean(example.isDefault),
+    contentType: example.contentType || "application/json",
+  }));
+}
+
+export function normalizeRequestTab(input: RequestTab): RequestTab {
+  const base = createDefaultTab();
+  const tab = { ...base, ...input };
+  return {
+    ...tab,
+    id: input.id || base.id,
+    name: input.name || base.name,
+    method: input.method || base.method,
+    requestType: input.requestType || base.requestType,
+    params: Array.isArray(input.params) && input.params.length > 0 ? input.params : [createEmptyKV()],
+    headers: Array.isArray(input.headers) && input.headers.length > 0 ? input.headers : [createEmptyKV()],
+    bodyFormData:
+      Array.isArray(input.bodyFormData) && input.bodyFormData.length > 0
+        ? input.bodyFormData
+        : [createEmptyKV()],
+    cookies:
+      Array.isArray(input.cookies) && input.cookies.length > 0
+        ? input.cookies
+        : [createEmptyKV()],
+    grpcMetadata:
+      Array.isArray(input.grpcMetadata) && input.grpcMetadata.length > 0
+        ? input.grpcMetadata
+        : [createEmptyKV()],
+    settings: {
+      ...defaultSettings(),
+      ...(input.settings || {}),
+    },
+    assertions: Array.isArray(input.assertions) ? input.assertions : [],
+    variables: normalizeEnvVariables(input.variables),
+    examples: normalizeRequestExamples(input.examples),
+    useMockExamples: Boolean(input.useMockExamples),
+    selectedExampleId: typeof input.selectedExampleId === "string" ? input.selectedExampleId : null,
+    sourceCollectionId: input.sourceCollectionId || undefined,
+    sourceFolderPath: Array.isArray(input.sourceFolderPath) ? input.sourceFolderPath : [],
+    sourceRequestId: input.sourceRequestId || undefined,
+  };
+}
+
+function normalizeSavedRequest(request: SavedRequest): SavedRequest {
+  const tab = normalizeRequestTab(request.tab as RequestTab);
+  return {
+    ...request,
+    id: request.id || uid(),
+    name: request.name || tab.name,
+    method: request.method || tab.method,
+    url: request.url || tab.url,
+    tab,
+  };
+}
+
+function normalizeCollectionFolder(folder: CollectionFolder): CollectionFolder {
+  return {
+    id: folder.id || uid(),
+    name: folder.name || "Folder",
+    requests: Array.isArray(folder.requests)
+      ? folder.requests.map(normalizeSavedRequest)
+      : [],
+    folders: Array.isArray(folder.folders)
+      ? folder.folders.map(normalizeCollectionFolder)
+      : [],
+    variables: normalizeEnvVariables(folder.variables),
+    preRequestScript: folder.preRequestScript || "",
+    testScript: folder.testScript || "",
+  };
+}
+
+function normalizeCollection(collection: Collection): Collection {
+  return {
+    id: collection.id || uid(),
+    name: collection.name || "Collection",
+    requests: Array.isArray(collection.requests)
+      ? collection.requests.map(normalizeSavedRequest)
+      : [],
+    folders: Array.isArray(collection.folders)
+      ? collection.folders.map(normalizeCollectionFolder)
+      : [],
+    variables: normalizeEnvVariables(collection.variables),
+    preRequestScript: collection.preRequestScript || "",
+    testScript: collection.testScript || "",
+    sourceType:
+      collection.sourceType === "openapi" ||
+      collection.sourceType === "postman" ||
+      collection.sourceType === "manual"
+        ? collection.sourceType
+        : "manual",
+    sourceHash: collection.sourceHash || "",
+    contractFingerprint:
+      collection.contractFingerprint && typeof collection.contractFingerprint === "object"
+        ? collection.contractFingerprint
+        : {},
+  };
+}
 
 function createInitialState(): GetmanState {
   const defaultTab = createDefaultTab();
@@ -610,7 +776,7 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
   const parsed = data as Partial<PersistedState>;
   const tabs =
     Array.isArray(parsed.tabs) && parsed.tabs.length > 0
-      ? parsed.tabs
+      ? parsed.tabs.map((tab) => normalizeRequestTab(tab as RequestTab))
       : [createDefaultTab()];
 
   const activeTabId =
@@ -636,10 +802,7 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     activeTabId,
     history: Array.isArray(parsed.history) ? parsed.history.slice(0, 100) : [],
     collections: Array.isArray(parsed.collections)
-      ? parsed.collections.map((c: Collection) => ({
-          ...c,
-          folders: Array.isArray(c.folders) ? c.folders : [],
-        }))
+      ? parsed.collections.map((collection) => normalizeCollection(collection as Collection))
       : [],
     environments: Array.isArray(parsed.environments) ? parsed.environments : [],
     activeEnvironmentId:
@@ -854,7 +1017,18 @@ export function setActiveEnvironment(id: string | null) {
 }
 
 export function addCollection(name: string) {
-  const col: Collection = { id: uid(), name, requests: [], folders: [] };
+  const col: Collection = {
+    id: uid(),
+    name,
+    requests: [],
+    folders: [],
+    variables: [],
+    preRequestScript: "",
+    testScript: "",
+    sourceType: "manual",
+    sourceHash: "",
+    contractFingerprint: {},
+  };
   setState({ collections: [...state.collections, col] });
 }
 
@@ -869,9 +1043,97 @@ export function renameCollection(id: string, name: string) {
   setState({ collections });
 }
 
+export function updateCollectionScopes(
+  id: string,
+  partial: Pick<Collection, "variables" | "preRequestScript" | "testScript">
+) {
+  const collections = state.collections.map((collection) =>
+    collection.id === id
+      ? {
+          ...collection,
+          variables: normalizeEnvVariables(partial.variables ?? collection.variables),
+          preRequestScript: partial.preRequestScript ?? collection.preRequestScript ?? "",
+          testScript: partial.testScript ?? collection.testScript ?? "",
+        }
+      : collection
+  );
+  setState({ collections });
+}
+
+function updateFolderScopesRecursive(
+  folders: CollectionFolder[],
+  folderId: string,
+  partial: Pick<CollectionFolder, "variables" | "preRequestScript" | "testScript">
+): CollectionFolder[] {
+  return folders.map((folder) => {
+    const nextFolder: CollectionFolder = {
+      ...folder,
+      folders: updateFolderScopesRecursive(folder.folders, folderId, partial),
+    };
+    if (folder.id !== folderId) {
+      return nextFolder;
+    }
+    return {
+      ...nextFolder,
+      variables: normalizeEnvVariables(partial.variables ?? nextFolder.variables),
+      preRequestScript: partial.preRequestScript ?? nextFolder.preRequestScript ?? "",
+      testScript: partial.testScript ?? nextFolder.testScript ?? "",
+    };
+  });
+}
+
+export function updateFolderScopes(
+  collectionId: string,
+  folderId: string,
+  partial: Pick<CollectionFolder, "variables" | "preRequestScript" | "testScript">
+) {
+  const collections = state.collections.map((collection) =>
+    collection.id === collectionId
+      ? {
+          ...collection,
+          folders: updateFolderScopesRecursive(collection.folders, folderId, partial),
+        }
+      : collection
+  );
+  setState({ collections });
+}
+
+export function replaceCollection(collectionId: string, nextCollection: Collection) {
+  const normalized = normalizeCollection({ ...nextCollection, id: collectionId });
+  const collections = state.collections.map((collection) =>
+    collection.id === collectionId ? normalized : collection
+  );
+  setState({ collections });
+}
+
+export function importOrReplaceCollectionByName(collection: Collection): "imported" | "replaced" {
+  const normalized = normalizeCollection(collection);
+  const existing = state.collections.find(
+    (item) => item.name.trim().toLowerCase() === normalized.name.trim().toLowerCase()
+  );
+  if (!existing) {
+    setState({ collections: [...state.collections, normalized] });
+    return "imported";
+  }
+  const collections = state.collections.map((item) =>
+    item.id === existing.id ? { ...normalized, id: existing.id } : item
+  );
+  setState({ collections });
+  return "replaced";
+}
+
 export function saveRequestToCollection(collectionId: string, request: SavedRequest) {
+  const normalizedRequest: SavedRequest = {
+    ...request,
+    tab: normalizeRequestTab({
+      ...request.tab,
+      sourceCollectionId: collectionId,
+      sourceFolderPath: [],
+      sourceRequestId: request.id,
+    } as RequestTab),
+  };
   const collections = state.collections.map((c) =>
-    c.id === collectionId ? { ...c, requests: [...c.requests, request] } : c
+    c.id === collectionId ? { ...c, requests: [...c.requests, normalizedRequest] } : c
   );
   setState({ collections });
 }
@@ -894,12 +1156,21 @@ export function renameRequestInCollection(collectionId: string, requestId: strin
   setState({ collections });
 }
 
-export function loadSavedRequest(savedReq: SavedRequest) {
+export function loadSavedRequest(
+  savedReq: SavedRequest,
+  scope?: { collectionId?: string; folderPath?: string[] }
+) {
   const existingTab = state.tabs.find((t) => t.url === savedReq.url && t.method === savedReq.method);
   if (existingTab) {
     setState({ activeTabId: existingTab.id, response: null });
   } else {
-    const tab: RequestTab = { ...savedReq.tab, id: uid() };
+    const tab: RequestTab = normalizeRequestTab({
+      ...savedReq.tab,
+      id: uid(),
+      sourceCollectionId: scope?.collectionId ?? savedReq.tab.sourceCollectionId,
+      sourceFolderPath: scope?.folderPath ?? savedReq.tab.sourceFolderPath ?? [],
+      sourceRequestId: savedReq.id,
+    } as RequestTab);
     setState({
       tabs: [...state.tabs, tab],
       activeTabId: tab.id,
@@ -956,14 +1227,57 @@ function resolveDynamicVariables(input: string): string {
     .replace(/\{\{\$randomInt\}\}/g, () => String(Math.floor(Math.random() * 10000)));
 }
 
-export function resolveEnvVariables(input: string): string {
+function applyVariableMap(input: string, map: Record<string, string>): string {
   let result = input;
   const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const [key, value] of Object.entries(map)) {
+    if (!key) continue;
+    result = result.replace(new RegExp(`\\{\\{${escapeRegex(key)}\\}\\}`, "g"), value);
+  }
+  return result;
+}
+
+export function getVariableScopeSnapshot(): {
+  globalVariables: Record<string, string>;
+  environmentVariables: Record<string, string>;
+} {
+  const globalVariables: Record<string, string> = {};
+  const environmentVariables: Record<string, string> = {};
+
+  for (const variable of state.globalVariables) {
+    if (variable.enabled && variable.key) {
+      globalVariables[variable.key] = variable.value;
+    }
+  }
+
+  if (state.activeEnvironmentId) {
+    const environment = state.environments.find(
+      (item) => item.id === state.activeEnvironmentId
+    );
+    if (environment) {
+      for (const variable of environment.variables) {
+        if (variable.enabled && variable.key) {
+          environmentVariables[variable.key] = variable.value;
+        }
+      }
+    }
+  }
+
+  return { globalVariables, environmentVariables };
+}
+
+export function resolveEnvVariables(
+  input: string,
+  scope?: VariableScopeContext
+): string {
+  let result = input;
+  const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const variables: Record<string, string> = {};
 
   // 1. Global variables (lowest priority)
   for (const v of state.globalVariables) {
     if (v.enabled && v.key) {
-      result = result.replace(new RegExp(`\\{\\{${escapeRegex(v.key)}\\}\\}`, "g"), v.value);
+      variables[v.key] = v.value;
     }
   }
 
@@ -973,13 +1287,43 @@ export function resolveEnvVariables(input: string): string {
     if (env) {
       for (const v of env.variables) {
         if (v.enabled && v.key) {
-          result = result.replace(new RegExp(`\\{\\{${escapeRegex(v.key)}\\}\\}`, "g"), v.value);
+          variables[v.key] = v.value;
         }
       }
     }
   }
 
-  // 3. Ephemeral vault variables: {{$vault:key}}
+  // 3. Collection scoped variables
+  for (const v of scope?.collectionVariables ?? []) {
+    if (v.enabled && v.key) {
+      variables[v.key] = v.value;
+    }
+  }
+
+  // 4. Folder scoped variables in hierarchy order
+  for (const folderVariables of scope?.folderVariables ?? []) {
+    for (const v of folderVariables) {
+      if (v.enabled && v.key) {
+        variables[v.key] = v.value;
+      }
+    }
+  }
+
+  // 5. Request scoped variables
+  for (const v of scope?.requestVariables ?? []) {
+    if (v.enabled && v.key) {
+      variables[v.key] = v.value;
+    }
+  }
+
+  // 6. Runtime variables (highest priority)
+  for (const [key, value] of Object.entries(scope?.runtimeVariables ?? {})) {
+    if (key) variables[key] = value;
+  }
+
+  result = applyVariableMap(result, variables);
+
+  // 7. Ephemeral vault variables: {{$vault:key}}
   const now = Date.now();
   for (const secret of state.vaultSecrets) {
     if (!secret.key || secret.expiresAt <= now) continue;
@@ -988,7 +1332,7 @@ export function resolveEnvVariables(input: string): string {
     result = result.replace(new RegExp(`\\{\\{vault\\.${escapedKey}\\}\\}`, "g"), secret.value);
   }
 
-  // 4. Dynamic variables (always resolved last)
+  // 8. Dynamic variables (always resolved last)
   result = resolveDynamicVariables(result);
 
   return result;
@@ -1044,7 +1388,15 @@ export function setAssertionResults(results: AssertionResult[]) {
 // ─── Collection Folder Actions ────────────────────────────────────────────────
 
 export function addFolderToCollection(collectionId: string, folderName: string) {
-  const folder: CollectionFolder = { id: uid(), name: folderName, folders: [], requests: [] };
+  const folder: CollectionFolder = {
+    id: uid(),
+    name: folderName,
+    folders: [],
+    requests: [],
+    variables: [],
+    preRequestScript: "",
+    testScript: "",
+  };
   const collections = state.collections.map((c) =>
     c.id === collectionId ? { ...c, folders: [...c.folders, folder] } : c
   );
@@ -1098,14 +1450,35 @@ export function moveRequestToFolder(collectionId: string, requestId: string, tar
 
     if (targetFolderId === null) {
       // Move to root
-      newRequests = [...newRequests, request];
+      const movedRequest: SavedRequest = {
+        ...request,
+        tab: normalizeRequestTab({
+          ...request.tab,
+          sourceCollectionId: collectionId,
+          sourceFolderPath: [],
+        } as RequestTab),
+      };
+      newRequests = [...newRequests, movedRequest];
       return { ...c, requests: newRequests, folders: newFolders };
     }
 
     // Move to target folder
     const updatedFolders = newFolders.map((f) =>
       f.id === targetFolderId
-        ? { ...f, requests: [...f.requests, request!] }
+        ? {
+            ...f,
+            requests: [
+              ...f.requests,
+              {
+                ...request!,
+                tab: normalizeRequestTab({
+                  ...request!.tab,
+                  sourceCollectionId: collectionId,
+                  sourceFolderPath: [targetFolderId],
+                } as RequestTab),
+              },
+            ],
+          }
         : f
     );
     return { ...c, requests: newRequests, folders: updatedFolders };
@@ -1114,13 +1487,22 @@ export function moveRequestToFolder(collectionId: string, requestId: string, tar
 }
 
 export function saveRequestToFolder(collectionId: string, folderId: string, request: SavedRequest) {
+  const normalizedRequest: SavedRequest = {
+    ...request,
+    tab: normalizeRequestTab({
+      ...request.tab,
+      sourceCollectionId: collectionId,
+      sourceFolderPath: [folderId],
+      sourceRequestId: request.id,
+    } as RequestTab),
+  };
   const collections = state.collections.map((c) =>
     c.id === collectionId
       ? {
           ...c,
           folders: c.folders.map((f) =>
             f.id === folderId
-              ? { ...f, requests: [...f.requests, request] }
+              ? { ...f, requests: [...f.requests, normalizedRequest] }
               : f
           ),
         }
@@ -1132,7 +1514,7 @@ export function saveRequestToFolder(collectionId: string, folderId: string, requ
 // ─── Import/Export ────────────────────────────────────────────────────────────
 
 export function importCollections(collections: Collection[]) {
-  setState({ collections: [...state.collections, ...collections] });
+  setState({ collections: [...state.collections, ...collections.map(normalizeCollection)] });
 }
 
 export function getCollections(): Collection[] {
@@ -1394,6 +1776,62 @@ export function createMockFromResponse(name: string, port: number) {
 
   const server: MockServer = { id: uid(), name, port, routes: [route], running: false };
   setState({ mockServers: [...state.mockServers, server] });
+}
+
+export interface SavedRequestScope {
+  collection: Collection;
+  request: SavedRequest;
+  folderChain: CollectionFolder[];
+}
+
+function findRequestInFolders(
+  folders: CollectionFolder[],
+  matcher: (request: SavedRequest) => boolean,
+  parentChain: CollectionFolder[] = []
+): { request: SavedRequest; folderChain: CollectionFolder[] } | null {
+  for (const folder of folders) {
+    for (const request of folder.requests) {
+      if (matcher(request)) {
+        return { request, folderChain: [...parentChain, folder] };
+      }
+    }
+    const nested = findRequestInFolders(folder.folders, matcher, [...parentChain, folder]);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+export function findSavedRequestScopeByTab(tab: RequestTab): SavedRequestScope | null {
+  const matcher = (request: SavedRequest) =>
+    (tab.sourceRequestId && request.id === tab.sourceRequestId) ||
+    (request.method === tab.method && request.url === tab.url && request.name === tab.name);
+
+  if (tab.sourceCollectionId) {
+    const collection = state.collections.find((item) => item.id === tab.sourceCollectionId);
+    if (collection) {
+      const root = collection.requests.find(matcher);
+      if (root) {
+        return { collection, request: root, folderChain: [] };
+      }
+      const nested = findRequestInFolders(collection.folders, matcher);
+      if (nested) {
+        return { collection, request: nested.request, folderChain: nested.folderChain };
+      }
+    }
+  }
+
+  for (const collection of state.collections) {
+    const root = collection.requests.find(matcher);
+    if (root) {
+      return { collection, request: root, folderChain: [] };
+    }
+    const nested = findRequestInFolders(collection.folders, matcher);
+    if (nested) {
+      return { collection, request: nested.request, folderChain: nested.folderChain };
+    }
+  }
+
+  return null;
 }
 
 // ─── Command Palette ──────────────────────────────────────────────────────────

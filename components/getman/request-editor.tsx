@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useActiveTab, updateActiveTab, updateActiveTabParams } from "@/lib/getman-store";
+import {
+  uid,
+  useActiveTab,
+  updateActiveTab,
+  updateActiveTabParams,
+} from "@/lib/getman-store";
 import { parseProtoContent, fetchGrpcReflection } from "@/lib/tauri";
 import { KVEditor } from "./kv-editor";
 import { AuthEditor } from "./auth-editor";
@@ -173,6 +178,199 @@ function ScriptEditor() {
   );
 }
 
+function VariablesEditor() {
+  const tab = useActiveTab();
+  if (!tab) return null;
+
+  return (
+    <KVEditor
+      items={tab.variables ?? []}
+      onChange={(variables) => updateActiveTab({ variables })}
+      keyPlaceholder="Variable"
+      valuePlaceholder="Value"
+    />
+  );
+}
+
+function ExamplesEditor() {
+  const tab = useActiveTab();
+  if (!tab) return null;
+
+  const examples = tab.examples ?? [];
+  const selectedExampleId =
+    tab.selectedExampleId || examples.find((item) => item.isDefault)?.id || examples[0]?.id || "";
+  const selectedExample = examples.find((item) => item.id === selectedExampleId) || null;
+
+  const updateExample = (id: string, partial: Partial<(typeof examples)[number]>) => {
+    const nextExamples = examples.map((item) => (item.id === id ? { ...item, ...partial } : item));
+    updateActiveTab({ examples: nextExamples });
+  };
+
+  const handleCreateExample = () => {
+    const exampleId = uid();
+    const nextExamples = [
+      ...examples.map((item) => ({ ...item, isDefault: false })),
+      {
+        id: exampleId,
+        name: `Example ${examples.length + 1}`,
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        delayMs: 0,
+        tags: [],
+        isDefault: examples.length === 0,
+        contentType: "application/json",
+      },
+    ];
+    updateActiveTab({
+      examples: nextExamples,
+      selectedExampleId: exampleId,
+    });
+  };
+
+  const handleDeleteExample = (id: string) => {
+    const remaining = examples.filter((item) => item.id !== id);
+    const fallbackId = remaining.find((item) => item.isDefault)?.id || remaining[0]?.id || null;
+    updateActiveTab({
+      examples: remaining,
+      selectedExampleId: fallbackId,
+    });
+  };
+
+  return (
+    <div className="flex h-full">
+      <div className="w-[220px] shrink-0 border-r border-border/60">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border/60">
+          <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+            Examples
+          </span>
+          <button
+            type="button"
+            onClick={handleCreateExample}
+            className="text-[10px] font-medium text-primary hover:underline"
+          >
+            + Add
+          </button>
+        </div>
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40">
+          <input
+            type="checkbox"
+            id="use-mock-examples"
+            checked={Boolean(tab.useMockExamples)}
+            onChange={(e) => updateActiveTab({ useMockExamples: e.target.checked })}
+            className="h-3.5 w-3.5 rounded border-border accent-primary"
+          />
+          <label htmlFor="use-mock-examples" className="text-[11px] text-foreground">
+            Use mock examples
+          </label>
+        </div>
+        <div className="max-h-full overflow-auto">
+          {examples.map((example) => (
+            <button
+              key={example.id}
+              type="button"
+              onClick={() => updateActiveTab({ selectedExampleId: example.id })}
+              className={`w-full border-b border-border/30 px-3 py-2 text-left hover:bg-[hsl(var(--surface-2))] ${
+                selectedExampleId === example.id ? "bg-[hsl(var(--surface-2))]" : ""
+              }`}
+            >
+              <div className="text-xs text-foreground truncate">{example.name}</div>
+              <div className="text-[10px] text-muted-foreground">
+                {example.statusCode} · {example.contentType}
+              </div>
+            </button>
+          ))}
+          {examples.length === 0 && (
+            <div className="px-3 py-6 text-[11px] text-muted-foreground">
+              No examples yet.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 min-w-0">
+        {!selectedExample ? (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+            Select or create an example.
+          </div>
+        ) : (
+          <div className="flex h-full flex-col">
+            <div className="grid grid-cols-4 gap-2 border-b border-border/60 px-3 py-2">
+              <input
+                className="col-span-2 rounded border border-border bg-[hsl(var(--surface-1))] px-2 py-1 text-xs text-foreground outline-none focus:border-primary/50"
+                value={selectedExample.name}
+                onChange={(e) => updateExample(selectedExample.id, { name: e.target.value })}
+                placeholder="Example name"
+              />
+              <input
+                type="number"
+                className="rounded border border-border bg-[hsl(var(--surface-1))] px-2 py-1 text-xs text-foreground outline-none focus:border-primary/50"
+                value={selectedExample.statusCode}
+                onChange={(e) =>
+                  updateExample(selectedExample.id, { statusCode: Math.max(100, Number(e.target.value) || 200) })
+                }
+                min={100}
+                max={599}
+              />
+              <input
+                className="rounded border border-border bg-[hsl(var(--surface-1))] px-2 py-1 text-xs text-foreground outline-none focus:border-primary/50"
+                value={selectedExample.contentType}
+                onChange={(e) => updateExample(selectedExample.id, { contentType: e.target.value })}
+                placeholder="Content-Type"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2 border-b border-border/60 px-3 py-2 text-xs">
+              <label className="flex items-center gap-2 text-muted-foreground">
+                Delay (ms)
+                <input
+                  type="number"
+                  className="h-7 w-24 rounded border border-border bg-[hsl(var(--surface-1))] px-2 font-mono text-xs text-foreground outline-none focus:border-primary/50"
+                  value={selectedExample.delayMs}
+                  onChange={(e) => updateExample(selectedExample.id, { delayMs: Math.max(0, Number(e.target.value) || 0) })}
+                  min={0}
+                />
+              </label>
+              <label className="flex items-center gap-2 text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={selectedExample.isDefault}
+                  onChange={(e) => {
+                    if (!e.target.checked) return;
+                    updateActiveTab({
+                      selectedExampleId: selectedExample.id,
+                      examples: examples.map((item) => ({
+                        ...item,
+                        isDefault: item.id === selectedExample.id,
+                      })),
+                    });
+                  }}
+                />
+                Default example
+              </label>
+            </div>
+            <textarea
+              className="flex-1 w-full resize-none bg-transparent p-3 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+              placeholder="Example response body"
+              value={selectedExample.body}
+              onChange={(e) => updateExample(selectedExample.id, { body: e.target.value })}
+              spellCheck={false}
+            />
+            <div className="border-t border-border/60 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => handleDeleteExample(selectedExample.id)}
+                className="text-xs text-destructive hover:underline"
+              >
+                Delete Example
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FlowEditor() {
   const tab = useActiveTab();
   if (!tab) return null;
@@ -297,6 +495,8 @@ export function RequestEditor() {
               { value: "query", label: "Query" },
               { value: "headers", label: "Headers", count: enabledHeaders },
               { value: "auth", label: "Auth" },
+              { value: "variables", label: "Variables", count: (tab.variables ?? []).filter((v) => v.enabled && v.key).length },
+              { value: "examples", label: "Examples", count: (tab.examples ?? []).length },
               { value: "scripts", label: "Scripts", count: scriptCount },
               { value: "flow", label: "Flow", count: flowCount },
             ].map((t) => (
@@ -360,6 +560,14 @@ export function RequestEditor() {
 
           <TabsContent value="auth" className="m-0 h-full">
             <AuthEditor />
+          </TabsContent>
+
+          <TabsContent value="variables" className="m-0 h-full">
+            <VariablesEditor />
+          </TabsContent>
+
+          <TabsContent value="examples" className="m-0 h-full">
+            <ExamplesEditor />
           </TabsContent>
 
           <TabsContent value="scripts" className="m-0 h-full">
@@ -450,6 +658,8 @@ export function RequestEditor() {
           { value: "body", label: "Body" },
           { value: "auth", label: "Auth" },
           { value: "cookies", label: "Cookies", count: enabledCookies },
+          { value: "variables", label: "Variables", count: (tab.variables ?? []).filter((v) => v.enabled && v.key).length },
+          { value: "examples", label: "Examples", count: (tab.examples ?? []).length },
           { value: "tests", label: "Tests", count: assertionCount },
           { value: "scripts", label: "Scripts", count: scriptCount },
           { value: "flow", label: "Flow", count: flowCount },
@@ -503,6 +713,14 @@ export function RequestEditor() {
             keyPlaceholder="Cookie Name"
             valuePlaceholder="Cookie Value"
           />
+        </TabsContent>
+
+        <TabsContent value="variables" className="m-0 h-full">
+          <VariablesEditor />
+        </TabsContent>
+
+        <TabsContent value="examples" className="m-0 h-full">
+          <ExamplesEditor />
         </TabsContent>
 
         <TabsContent value="tests" className="m-0 h-full">

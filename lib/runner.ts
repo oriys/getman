@@ -9,18 +9,26 @@
 
 import type {
   Collection,
+  CollectionFolder,
+  EnvVariable,
   SavedRequest,
   ResponseData,
   RequestTab,
   HttpMethod,
 } from "./getman-store";
-import { resolveEnvVariables, uid, createDefaultTab } from "./getman-store";
+import {
+  resolveEnvVariables,
+  getVariableScopeSnapshot,
+  uid,
+  createDefaultTab,
+} from "./getman-store";
 import { sendHttpRequest, type SendRequestPayload } from "./tauri";
 import { runAssertions } from "./assertions";
 import type { AssertionResult } from "./getman-store";
 import {
   executePreRequestScript,
   executePostResponseScript,
+  type ScriptExecutionLog,
 } from "./request-scripts";
 import { applyAdvancedAuth } from "./advanced-auth";
 
@@ -91,6 +99,7 @@ export interface RunnerRequestResult {
   skipped?: boolean;
   skipReason?: string;
   chaosCase?: string;
+  scriptLogs?: ScriptExecutionLog[];
 }
 
 export interface RunnerResult {
@@ -124,6 +133,11 @@ export interface RunnerResult {
 }
 
 export type RunnerProgressCallback = (current: number, total: number, result: RunnerRequestResult) => void;
+
+interface RequestExecutionTarget {
+  request: SavedRequest;
+  folderChain: CollectionFolder[];
+}
 
 // ─── Data Parsing ────────────────────────────────────────────────────────────
 
@@ -338,10 +352,38 @@ function substituteDataVariables(input: string, data: Record<string, string>): s
   return result;
 }
 
+function variablesToMap(variables?: EnvVariable[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const variable of variables || []) {
+    if (variable.enabled && variable.key) {
+      map[variable.key] = variable.value;
+    }
+  }
+  return map;
+}
+
 // ─── Build Request Payload ──────────────────────────────────────────────────
 
-function buildPayloadFromTab(tab: RequestTab, dataRow: Record<string, string>): SendRequestPayload {
-  const resolveAll = (s: string) => substituteDataVariables(resolveEnvVariables(s), dataRow);
+function buildPayloadFromTab(
+  tab: RequestTab,
+  dataRow: Record<string, string>,
+  resolveScope?: {
+    collectionVariables?: EnvVariable[];
+    folderVariables?: EnvVariable[][];
+    requestVariables?: EnvVariable[];
+    runtimeVariables?: Record<string, string>;
+  }
+): SendRequestPayload {
+  const resolveAll = (s: string) =>
+    substituteDataVariables(
+      resolveEnvVariables(s, {
+        collectionVariables: resolveScope?.collectionVariables,
+        folderVariables: resolveScope?.folderVariables,
+        requestVariables: resolveScope?.requestVariables,
+        runtimeVariables: resolveScope?.runtimeVariables,
+      }),
+      dataRow
+    );
 
   const headers: Record<string, string> = {};
   for (const h of tab.headers) {
@@ -407,12 +449,30 @@ function buildPayloadFromTab(tab: RequestTab, dataRow: Record<string, string>): 
 
 // ─── Runner ──────────────────────────────────────────────────────────────────
 
-function getAllRequests(collection: Collection): SavedRequest[] {
-  const reqs: SavedRequest[] = [...collection.requests];
-  for (const folder of collection.folders) {
-    reqs.push(...folder.requests);
+function collectFolderRequests(
+  folders: CollectionFolder[],
+  chain: CollectionFolder[] = []
+): RequestExecutionTarget[] {
+  const targets: RequestExecutionTarget[] = [];
+  for (const folder of folders) {
+    const nextChain = [...chain, folder];
+    targets.push(
+      ...folder.requests.map((request) => ({
+        request,
+        folderChain: nextChain,
+      }))
+    );
+    targets.push(...collectFolderRequests(folder.folders, nextChain));
   }
-  return reqs;
+  return targets;
+}
+
+function getAllRequests(collection: Collection): RequestExecutionTarget[] {
+  const rootTargets: RequestExecutionTarget[] = collection.requests.map((request) => ({
+    request,
+    folderChain: [],
+  }));
+  return [...rootTargets, ...collectFolderRequests(collection.folders)];
 }
 
 function parseFlowDependencies(value: string): string[] {
@@ -532,16 +592,64 @@ function getFlowSkipReason(
 }
 
 async function runSingleRequest(
-  req: SavedRequest,
+  target: RequestExecutionTarget,
+  collection: Collection,
   iteration: number,
   dataRow: Record<string, string>,
+  variableScopes: {
+    globalVariables: Record<string, string>;
+    environmentVariables: Record<string, string>;
+  },
   chaosCase?: ChaosCase
 ): Promise<RunnerRequestResult> {
-  let payload = buildPayloadFromTab(req.tab, dataRow);
+  const req = target.request;
+  const runtimeVariables: Record<string, string> = {};
+  const scriptLogs: ScriptExecutionLog[] = [];
+  const collectionVariables = variablesToMap(collection.variables);
+  const folderVariables = target.folderChain.map((folder) => variablesToMap(folder.variables));
+  const requestVariables = variablesToMap(req.tab.variables);
+
+  const preScripts = [
+    { name: `${collection.name}::pre-request`, script: collection.preRequestScript || "" },
+    ...target.folderChain.map((folder) => ({
+      name: `${folder.name}::pre-request`,
+      script: folder.preRequestScript || "",
+    })),
+    { name: `${req.name}::pre-request`, script: req.tab.preRequestScript || "" },
+  ].filter((entry) => entry.script.trim());
+
+  const postScripts = [
+    { name: `${collection.name}::test`, script: collection.testScript || "" },
+    ...target.folderChain.map((folder) => ({
+      name: `${folder.name}::test`,
+      script: folder.testScript || "",
+    })),
+    { name: `${req.name}::test`, script: req.tab.testScript || "" },
+  ].filter((entry) => entry.script.trim());
+
+  let payload = buildPayloadFromTab(req.tab, dataRow, {
+    collectionVariables: collection.variables,
+    folderVariables: target.folderChain.map((folder) => folder.variables || []),
+    requestVariables: req.tab.variables,
+    runtimeVariables,
+  });
   const start = performance.now();
 
   try {
-    payload = executePreRequestScript(req.tab.preRequestScript || "", payload);
+    for (const script of preScripts) {
+      payload = executePreRequestScript(script.script, payload, {
+        scriptName: script.name,
+        requestName: req.name,
+        globalVariables: variableScopes.globalVariables,
+        environmentVariables: variableScopes.environmentVariables,
+        collectionVariables,
+        requestVariables,
+        runtimeVariables,
+        iterationData: dataRow,
+        logs: scriptLogs,
+      });
+    }
+
     payload = await applyAdvancedAuth(payload, req.tab);
     if (chaosCase) {
       payload = applyChaosCase(payload, chaosCase);
@@ -574,6 +682,7 @@ async function runSingleRequest(
       dataRow: Object.keys(dataRow).length > 0 ? dataRow : undefined,
       duration: Math.round(performance.now() - start),
       chaosCase,
+      scriptLogs,
     };
   }
 
@@ -583,18 +692,31 @@ async function runSingleRequest(
   const assertionResults = req.tab.assertions
     ? runAssertions(req.tab.assertions, response)
     : [];
-  assertionResults.push(
-    ...executePostResponseScript(
-      req.tab.testScript || "",
-      {
-        method: payload.method,
-        url: payload.url,
-        headers: payload.headers,
-        body: payload.body,
-      },
-      response
-    )
-  );
+  for (const script of postScripts) {
+    assertionResults.push(
+      ...executePostResponseScript(
+        script.script,
+        {
+          method: payload.method,
+          url: payload.url,
+          headers: payload.headers,
+          body: payload.body,
+        },
+        response,
+        {
+          scriptName: script.name,
+          requestName: req.name,
+          globalVariables: variableScopes.globalVariables,
+          environmentVariables: variableScopes.environmentVariables,
+          collectionVariables,
+          requestVariables,
+          runtimeVariables,
+          iterationData: dataRow,
+          logs: scriptLogs,
+        }
+      )
+    );
+  }
 
   return {
     requestId: req.id,
@@ -607,6 +729,7 @@ async function runSingleRequest(
     dataRow: Object.keys(dataRow).length > 0 ? dataRow : undefined,
     duration,
     chaosCase,
+    scriptLogs,
   };
 }
 
@@ -617,11 +740,12 @@ export async function runCollection(
   signal?: AbortSignal,
 ): Promise<RunnerResult> {
   const requests = getAllRequests(collection);
-  const flowOrchestratorUsed = requests.some((req) => hasFlowRules(req.tab));
+  const flowOrchestratorUsed = requests.some((target) => hasFlowRules(target.request.tab));
   const effectiveMode =
     flowOrchestratorUsed && options.mode === "parallel"
       ? "serial"
       : options.mode;
+  const variableScopes = getVariableScopeSnapshot();
   const dataRows = parseDataSource(options.dataSource);
   const iterations = Math.max(1, options.iterations || dataRows.length);
   const chaosCases = getChaosCases(options.chaos);
@@ -646,15 +770,22 @@ export async function runCollection(
     const resultByName = new Map<string, RunnerRequestResult>();
 
     if (effectiveMode === "parallel") {
-      const jobs = requests.flatMap((req) => [
-        { req, chaosCase: undefined as ChaosCase | undefined },
-        ...chaosCases.map((chaosCase) => ({ req, chaosCase })),
+      const jobs = requests.flatMap((target) => [
+        { target, chaosCase: undefined as ChaosCase | undefined },
+        ...chaosCases.map((chaosCase) => ({ target, chaosCase })),
       ]);
-      const promises = jobs.map(async ({ req, chaosCase }) => {
+      const promises = jobs.map(async ({ target, chaosCase }) => {
         if (signal?.aborted) return null;
-        const result = await runSingleRequest(req, iter, dataRow, chaosCase);
+        const result = await runSingleRequest(
+          target,
+          collection,
+          iter,
+          dataRow,
+          variableScopes,
+          chaosCase
+        );
         if (!result.skipped && !result.chaosCase && contractGuardUsed) {
-          currentContractSignatures[req.id] = buildContractSignature(result.response);
+          currentContractSignatures[target.request.id] = buildContractSignature(result.response);
         }
         completed++;
         onProgress?.(completed, totalRequests, result);
@@ -663,7 +794,8 @@ export async function runCollection(
       const batchResults = await Promise.all(promises);
       results.push(...batchResults.filter((r): r is RunnerRequestResult => r !== null));
     } else {
-      for (const req of requests) {
+      for (const target of requests) {
+        const req = target.request;
         if (signal?.aborted) break;
 
         const skipReason = getFlowSkipReason(
@@ -675,7 +807,7 @@ export async function runCollection(
         );
         const baseResult = skipReason
           ? createSkippedResult(req, iter, dataRow, skipReason)
-          : await runSingleRequest(req, iter, dataRow);
+          : await runSingleRequest(target, collection, iter, dataRow, variableScopes);
 
         if (!baseResult.skipped && contractGuardUsed) {
           currentContractSignatures[req.id] = buildContractSignature(baseResult.response);
@@ -701,7 +833,14 @@ export async function runCollection(
                 `Base request skipped: ${baseResult.skipReason || "flow gate"}`,
                 chaosCase
               )
-            : await runSingleRequest(req, iter, dataRow, chaosCase);
+            : await runSingleRequest(
+                target,
+                collection,
+                iter,
+                dataRow,
+                variableScopes,
+                chaosCase
+              );
           results.push(chaosResult);
           completed++;
           onProgress?.(completed, totalRequests, chaosResult);
@@ -727,7 +866,8 @@ export async function runCollection(
   let contractGateFailed = false;
   let contractBaselineUpdated = false;
   if (contractGuardUsed) {
-    for (const req of requests) {
+    for (const target of requests) {
+      const req = target.request;
       const currentSignature = currentContractSignatures[req.id];
       if (!currentSignature) continue;
       const previousSignature = previousContractBaseline[req.id];
@@ -877,6 +1017,10 @@ export function generateTextReport(result: RunnerResult): string {
     for (const a of r.assertionResults) {
       const aIcon = a.passed ? "  ✓" : "  ✗";
       lines.push(`    ${aIcon} ${a.message}`);
+    }
+    if (r.scriptLogs?.length) {
+      const errors = r.scriptLogs.filter((entry) => entry.level === "error").length;
+      lines.push(`    • script logs: ${r.scriptLogs.length} (${errors} errors)`);
     }
   }
 

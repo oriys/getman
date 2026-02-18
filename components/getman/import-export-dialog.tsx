@@ -5,11 +5,16 @@ import { Upload, Download, FileJson } from "lucide-react";
 import {
   useGetmanStore,
   importCollections,
-  getCollections,
-  type Collection,
+  replaceCollection,
 } from "@/lib/getman-store";
 import { importPostmanCollection, exportPostmanCollection } from "@/lib/postman";
 import { exportCliFormat, exportShellScript } from "@/lib/cli-export";
+import { exportCollectionDocsMarkdown } from "@/lib/api-docs";
+import {
+  diffOpenApiCollections,
+  importOpenApiCollection,
+  type OpenApiSyncSummary,
+} from "@/lib/openapi";
 import {
   Dialog,
   DialogContent,
@@ -27,10 +32,17 @@ import {
 
 export function ImportExportDialog() {
   const { collections } = useGetmanStore();
+  const [importFormat, setImportFormat] = useState<"postman" | "openapi">("postman");
+  const [openApiSyncMode, setOpenApiSyncMode] = useState<"replace-existing" | "import-new">(
+    "replace-existing"
+  );
+  const [openApiSyncReport, setOpenApiSyncReport] = useState<OpenApiSyncSummary | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const [exportCollectionId, setExportCollectionId] = useState<string>("");
-  const [exportFormat, setExportFormat] = useState<"postman" | "cli-json" | "shell">("postman");
+  const [exportFormat, setExportFormat] = useState<"postman" | "cli-json" | "shell" | "docs-md">(
+    "postman"
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -39,14 +51,36 @@ export function ImportExportDialog() {
 
     setImportError(null);
     setImportSuccess(null);
+    setOpenApiSyncReport(null);
 
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
         const content = ev.target?.result as string;
-        const collection = importPostmanCollection(content);
-        importCollections([collection]);
-        setImportSuccess(`Imported "${collection.name}" with ${collection.requests.length} requests`);
+        if (importFormat === "postman") {
+          const collection = importPostmanCollection(content);
+          importCollections([collection]);
+          setImportSuccess(`Imported "${collection.name}" with ${collection.requests.length} requests`);
+        } else {
+          const collection = importOpenApiCollection(content);
+          const existing = collections.find(
+            (item) => item.name.trim().toLowerCase() === collection.name.trim().toLowerCase()
+          );
+          const syncReport = existing ? diffOpenApiCollections(existing, collection) : null;
+          if (syncReport) {
+            setOpenApiSyncReport(syncReport);
+          }
+
+          if (existing && openApiSyncMode === "replace-existing") {
+            replaceCollection(existing.id, collection);
+            setImportSuccess(
+              `Synced "${collection.name}" (+${syncReport?.added.length ?? 0} ~${syncReport?.changed.length ?? 0} -${syncReport?.removed.length ?? 0})`
+            );
+          } else {
+            importCollections([collection]);
+            setImportSuccess(`Imported OpenAPI collection "${collection.name}"`);
+          }
+        }
       } catch (err) {
         setImportError(err instanceof Error ? err.message : "Failed to import collection");
       }
@@ -78,6 +112,10 @@ export function ImportExportDialog() {
       case "shell":
         content = exportShellScript(collection);
         filename = `${collection.name}.sh`;
+        break;
+      case "docs-md":
+        content = exportCollectionDocsMarkdown(collection);
+        filename = `${collection.name}.docs.md`;
         break;
     }
 
@@ -114,8 +152,37 @@ export function ImportExportDialog() {
               Import
             </span>
             <p className="text-xs text-muted-foreground">
-              Import a Postman Collection v2.1 JSON file
+              Import Postman/OpenAPI JSON and optionally sync OpenAPI changes.
             </p>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[11px] font-medium text-muted-foreground">Import Type</label>
+              <Select value={importFormat} onValueChange={(value) => setImportFormat(value as "postman" | "openapi")}>
+                <SelectTrigger className="h-8 border-border bg-[hsl(var(--surface-2))] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
+                  <SelectItem value="postman" className="text-xs">Postman Collection v2.1</SelectItem>
+                  <SelectItem value="openapi" className="text-xs">OpenAPI 3.x JSON</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {importFormat === "openapi" && (
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-medium text-muted-foreground">Sync Strategy</label>
+                <Select
+                  value={openApiSyncMode}
+                  onValueChange={(value) => setOpenApiSyncMode(value as "replace-existing" | "import-new")}
+                >
+                  <SelectTrigger className="h-8 border-border bg-[hsl(var(--surface-2))] text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-border bg-[hsl(var(--surface-1))]">
+                    <SelectItem value="replace-existing" className="text-xs">Replace matching collection</SelectItem>
+                    <SelectItem value="import-new" className="text-xs">Import as new collection</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div>
               <input
                 ref={fileInputRef}
@@ -138,6 +205,22 @@ export function ImportExportDialog() {
             )}
             {importSuccess && (
               <p className="text-xs text-green-500">{importSuccess}</p>
+            )}
+            {openApiSyncReport && (
+              <div className="rounded border border-border/60 bg-[hsl(var(--surface-2))] p-2 text-[11px] text-muted-foreground space-y-1">
+                <p>
+                  Sync diff: +{openApiSyncReport.added.length} / ~{openApiSyncReport.changed.length} / -
+                  {openApiSyncReport.removed.length}
+                </p>
+                {openApiSyncReport.breakingChanges.length > 0 && (
+                  <p className="text-amber-500">
+                    Breaking: {openApiSyncReport.breakingChanges.slice(0, 3).join(" · ")}
+                  </p>
+                )}
+                {openApiSyncReport.affectedRequests.length > 0 && (
+                  <p>Affected requests: {openApiSyncReport.affectedRequests.slice(0, 5).join(", ")}</p>
+                )}
+              </div>
             )}
           </div>
 
@@ -176,6 +259,7 @@ export function ImportExportDialog() {
                   <SelectItem value="postman" className="text-xs">Postman Collection v2.1</SelectItem>
                   <SelectItem value="cli-json" className="text-xs">Getman CLI (JSON)</SelectItem>
                   <SelectItem value="shell" className="text-xs">Shell Script (bash)</SelectItem>
+                  <SelectItem value="docs-md" className="text-xs">API Docs (Markdown)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
