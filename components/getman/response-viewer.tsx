@@ -389,7 +389,11 @@ function parseCookies(headers: Record<string, string>): ParsedCookie[] {
   const cookies: ParsedCookie[] = [];
   for (const [key, value] of Object.entries(headers)) {
     if (key.toLowerCase() !== "set-cookie") continue;
-    for (const raw of value.split(/,(?=\s*\w+=)/)) {
+    const rawCookies = value
+      .split(/\r?\n/)
+      .flatMap((line) => line.split(/,(?=\s*[^;=,\s]+=)/));
+
+    for (const raw of rawCookies) {
       const parts = raw.split(";").map((s) => s.trim());
       const [first, ...attrs] = parts;
       if (!first) continue;

@@ -22,6 +22,16 @@ pub struct SendRequestPayload {
     pub proxy_url: Option<String>,
     #[serde(default = "default_verify_ssl")]
     pub verify_ssl: bool,
+    #[serde(default)]
+    pub digest_username: Option<String>,
+    #[serde(default)]
+    pub digest_password: Option<String>,
+    #[serde(default)]
+    pub ntlm_username: Option<String>,
+    #[serde(default)]
+    pub ntlm_password: Option<String>,
+    #[serde(default)]
+    pub ntlm_domain: Option<String>,
 }
 
 fn default_verify_ssl() -> bool {

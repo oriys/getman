@@ -105,7 +105,16 @@ export interface RequestTab {
   graphqlQuery: string;
   graphqlVariables: string;
   cookies: KeyValue[];
-  authType: "none" | "bearer" | "basic" | "api-key" | "oauth2";
+  authType:
+    | "none"
+    | "bearer"
+    | "basic"
+    | "api-key"
+    | "oauth2"
+    | "digest"
+    | "ntlm"
+    | "awsv4"
+    | "wsse";
   authToken: string;
   authUsername: string;
   authPassword: string;
@@ -121,6 +130,17 @@ export interface RequestTab {
   oauth2Scope: string;
   oauth2CallbackUrl: string;
   oauth2AccessToken: string;
+  // NTLM fields
+  ntlmDomain: string;
+  // AWS SigV4 fields
+  awsAccessKeyId: string;
+  awsSecretAccessKey: string;
+  awsSessionToken: string;
+  awsRegion: string;
+  awsService: string;
+  // WSSE fields
+  wsseUsername: string;
+  wssePassword: string;
   // Request settings
   settings: RequestSettings;
   // Test assertions
@@ -128,6 +148,9 @@ export interface RequestTab {
   // Scripts
   preRequestScript: string;
   testScript: string;
+  // Flow orchestrator fields
+  flowDependsOn: string;
+  flowCondition: string;
   // gRPC fields
   grpcProtoContent: string;
   grpcServiceName: string;
@@ -196,6 +219,13 @@ export interface Environment {
   id: string;
   name: string;
   variables: EnvVariable[];
+}
+
+export interface VaultSecret {
+  id: string;
+  key: string;
+  value: string;
+  expiresAt: number;
 }
 
 // ─── Cookie Jar ───────────────────────────────────────────────────────────────
@@ -340,6 +370,7 @@ export interface GetmanState {
   environments: Environment[];
   activeEnvironmentId: string | null;
   globalVariables: EnvVariable[];
+  vaultSecrets: VaultSecret[];
   sidebarView: "collections" | "history" | "environments" | "websocket" | "sse" | "cookies" | "plugins";
   sidebarOpen: boolean;
   assertionResults: AssertionResult[];
@@ -501,10 +532,20 @@ export function createDefaultTab(): RequestTab {
     oauth2Scope: "",
     oauth2CallbackUrl: "http://localhost/callback",
     oauth2AccessToken: "",
+    ntlmDomain: "",
+    awsAccessKeyId: "",
+    awsSecretAccessKey: "",
+    awsSessionToken: "",
+    awsRegion: "us-east-1",
+    awsService: "execute-api",
+    wsseUsername: "",
+    wssePassword: "",
     settings: defaultSettings(),
     assertions: [],
     preRequestScript: "",
     testScript: "",
+    flowDependsOn: "",
+    flowCondition: "",
     grpcProtoContent: "",
     grpcServiceName: "",
     grpcMethodName: "",
@@ -540,6 +581,7 @@ function createInitialState(): GetmanState {
     environments: [],
     activeEnvironmentId: null,
     globalVariables: [],
+    vaultSecrets: [],
     sidebarView: "collections",
     sidebarOpen: true,
     assertionResults: [],
@@ -604,6 +646,7 @@ function normalizeState(data: unknown): Partial<GetmanState> | null {
     globalVariables: Array.isArray((parsed as Partial<GetmanState>).globalVariables)
       ? (parsed as Partial<GetmanState>).globalVariables ?? []
       : [],
+    vaultSecrets: [],
     sidebarView,
     sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : true,
     response: null,
@@ -905,11 +948,12 @@ function resolveDynamicVariables(input: string): string {
 
 export function resolveEnvVariables(input: string): string {
   let result = input;
+  const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   // 1. Global variables (lowest priority)
   for (const v of state.globalVariables) {
     if (v.enabled && v.key) {
-      result = result.replace(new RegExp(`\\{\\{${v.key}\\}\\}`, "g"), v.value);
+      result = result.replace(new RegExp(`\\{\\{${escapeRegex(v.key)}\\}\\}`, "g"), v.value);
     }
   }
 
@@ -919,13 +963,22 @@ export function resolveEnvVariables(input: string): string {
     if (env) {
       for (const v of env.variables) {
         if (v.enabled && v.key) {
-          result = result.replace(new RegExp(`\\{\\{${v.key}\\}\\}`, "g"), v.value);
+          result = result.replace(new RegExp(`\\{\\{${escapeRegex(v.key)}\\}\\}`, "g"), v.value);
         }
       }
     }
   }
 
-  // 3. Dynamic variables (always resolved last)
+  // 3. Ephemeral vault variables: {{$vault:key}}
+  const now = Date.now();
+  for (const secret of state.vaultSecrets) {
+    if (!secret.key || secret.expiresAt <= now) continue;
+    const escapedKey = escapeRegex(secret.key);
+    result = result.replace(new RegExp(`\\{\\{\\$vault:${escapedKey}\\}\\}`, "g"), secret.value);
+    result = result.replace(new RegExp(`\\{\\{vault\\.${escapedKey}\\}\\}`, "g"), secret.value);
+  }
+
+  // 4. Dynamic variables (always resolved last)
   result = resolveDynamicVariables(result);
 
   return result;
@@ -933,6 +986,39 @@ export function resolveEnvVariables(input: string): string {
 
 export function updateGlobalVariables(variables: EnvVariable[]) {
   setState({ globalVariables: variables });
+}
+
+export function upsertVaultSecret(key: string, value: string, ttlSeconds: number) {
+  const normalizedKey = key.trim();
+  if (!normalizedKey) return;
+  const now = Date.now();
+  const expiresAt = now + Math.max(1, ttlSeconds) * 1000;
+  const activeSecrets = state.vaultSecrets.filter((s) => s.expiresAt > now && s.key !== normalizedKey);
+  const nextSecrets = [
+    ...activeSecrets,
+    {
+      id: uid(),
+      key: normalizedKey,
+      value,
+      expiresAt,
+    },
+  ];
+  setState({ vaultSecrets: nextSecrets }, { persist: false });
+}
+
+export function removeVaultSecret(key: string) {
+  setState(
+    { vaultSecrets: state.vaultSecrets.filter((s) => s.key !== key) },
+    { persist: false }
+  );
+}
+
+export function clearExpiredVaultSecrets() {
+  const now = Date.now();
+  setState(
+    { vaultSecrets: state.vaultSecrets.filter((s) => s.expiresAt > now) },
+    { persist: false }
+  );
 }
 
 // ─── Request Lifecycle ────────────────────────────────────────────────────────
@@ -1050,16 +1136,25 @@ export function getEnvironments(): Environment[] {
 // ─── Cookie Jar Actions ───────────────────────────────────────────────────────
 
 export function addCookieEntry(entry: CookieEntry) {
+  const normalizedEntry: CookieEntry = {
+    ...entry,
+    domain: entry.domain.trim().toLowerCase().replace(/^\./, ""),
+    path: entry.path || "/",
+  };
+
   // Replace existing cookie with same name+domain, or add new
   const existing = state.cookieJar.findIndex(
-    (c) => c.name === entry.name && c.domain === entry.domain
+    (c) =>
+      c.name === normalizedEntry.name &&
+      c.domain === normalizedEntry.domain &&
+      (c.path || "/") === normalizedEntry.path
   );
   if (existing >= 0) {
     const jar = [...state.cookieJar];
-    jar[existing] = entry;
+    jar[existing] = normalizedEntry;
     setState({ cookieJar: jar });
   } else {
-    setState({ cookieJar: [...state.cookieJar, entry] });
+    setState({ cookieJar: [...state.cookieJar, normalizedEntry] });
   }
 }
 

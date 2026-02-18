@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from "react"
 
-import { Send, Loader2, X, Settings2, Copy, Check, Eye } from "lucide-react";
+import { Send, X, Settings2, Copy, Check, Eye } from "lucide-react";
 import {
   useActiveTab,
   useGetmanStore,
@@ -14,17 +14,35 @@ import {
   setActiveRequestId,
   setAssertionResults,
   addHistoryItem,
+  addWsConnection,
+  updateWsConnection,
+  addWsMessage,
+  removeWsConnection,
   resolveEnvVariables,
+  addCookieEntry,
   uid,
+  type AssertionResult,
   type HttpMethod,
+  type KeyValue,
+  type CookieEntry,
   type RequestSettings,
   type RequestType,
   defaultSettings,
 } from "@/lib/getman-store";
-import { sendHttpRequest, cancelHttpRequest, sendGrpcRequest, parseProtoContent } from "@/lib/tauri";
+import {
+  sendHttpRequest,
+  cancelHttpRequest,
+  sendGrpcRequest,
+  type SendRequestPayload,
+} from "@/lib/tauri";
 import { runAssertions } from "@/lib/assertions";
 import { isCurlCommand, parseCurlCommand } from "@/lib/curl-parser";
 import { generateCode } from "@/lib/code-generator";
+import {
+  executePreRequestScript,
+  executePostResponseScript,
+} from "@/lib/request-scripts";
+import { applyAdvancedAuth } from "@/lib/advanced-auth";
 import { CodeGeneratorDialog } from "./code-generator-dialog";
 import {
   Select,
@@ -60,6 +78,211 @@ const methodTextColors: Record<HttpMethod, string> = {
   HEAD: "text-[hsl(var(--method-head))]",
   OPTIONS: "text-[hsl(var(--method-options))]",
 };
+
+const activeWebSocketRequests = new Map<string, WebSocket>();
+
+function normalizeCookieDomain(domain: string): string {
+  return domain.trim().toLowerCase().replace(/^\./, "");
+}
+
+function isCookieExpired(expires: string): boolean {
+  if (!expires || expires === "Infinity") {
+    return false;
+  }
+  const expiresAt = Date.parse(expires);
+  if (Number.isNaN(expiresAt)) {
+    return false;
+  }
+  return expiresAt <= Date.now();
+}
+
+function cookieDomainMatches(hostname: string, cookieDomain: string): boolean {
+  const normalizedHost = hostname.toLowerCase();
+  const normalizedCookieDomain = normalizeCookieDomain(cookieDomain);
+  return (
+    normalizedHost === normalizedCookieDomain ||
+    normalizedHost.endsWith(`.${normalizedCookieDomain}`)
+  );
+}
+
+function cookiePathMatches(pathname: string, cookiePath: string): boolean {
+  const normalizedPathname = pathname || "/";
+  const normalizedCookiePath = cookiePath.startsWith("/") ? cookiePath : `/${cookiePath}`;
+  if (normalizedCookiePath === "/") {
+    return true;
+  }
+  return (
+    normalizedPathname === normalizedCookiePath ||
+    normalizedPathname.startsWith(
+      normalizedCookiePath.endsWith("/")
+        ? normalizedCookiePath
+        : `${normalizedCookiePath}/`
+    )
+  );
+}
+
+function splitSetCookieHeader(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .flatMap((line) => line.split(/,(?=\s*[^;=,\s]+=)/))
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+interface ParsedCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  expires?: string;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite?: string;
+}
+
+function parseSetCookieHeaders(headers: Record<string, string>): ParsedCookie[] {
+  const parsed: ParsedCookie[] = [];
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== "set-cookie") {
+      continue;
+    }
+
+    const rawCookies = splitSetCookieHeader(value);
+    for (const rawCookie of rawCookies) {
+      const parts = rawCookie
+        .split(";")
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+      const [nameValue, ...attrs] = parts;
+      if (!nameValue) {
+        continue;
+      }
+
+      const eqIdx = nameValue.indexOf("=");
+      if (eqIdx <= 0) {
+        continue;
+      }
+
+      const cookie: ParsedCookie = {
+        name: nameValue.slice(0, eqIdx).trim(),
+        value: nameValue.slice(eqIdx + 1).trim(),
+        httpOnly: false,
+        secure: false,
+      };
+
+      for (const attr of attrs) {
+        const lower = attr.toLowerCase();
+        if (lower.startsWith("domain=")) {
+          cookie.domain = attr.slice(7).trim();
+        } else if (lower.startsWith("path=")) {
+          cookie.path = attr.slice(5).trim();
+        } else if (lower.startsWith("expires=")) {
+          cookie.expires = attr.slice(8).trim();
+        } else if (lower.startsWith("max-age=")) {
+          const seconds = Number(attr.slice(8).trim());
+          if (!Number.isNaN(seconds)) {
+            cookie.expires = new Date(Date.now() + seconds * 1000).toUTCString();
+          }
+        } else if (lower.startsWith("samesite=")) {
+          cookie.sameSite = attr.slice(9).trim();
+        } else if (lower === "httponly") {
+          cookie.httpOnly = true;
+        } else if (lower === "secure") {
+          cookie.secure = true;
+        }
+      }
+
+      parsed.push(cookie);
+    }
+  }
+
+  return parsed;
+}
+
+function buildCookieHeaderValue(
+  requestUrl: URL,
+  cookieJar: CookieEntry[],
+  manualCookies: KeyValue[]
+): string | null {
+  const cookieMap = new Map<string, string>();
+
+  for (const cookie of cookieJar) {
+    if (!cookie.name || !cookie.domain) {
+      continue;
+    }
+    if (isCookieExpired(cookie.expires)) {
+      continue;
+    }
+    if (cookie.secure && requestUrl.protocol !== "https:") {
+      continue;
+    }
+    if (!cookieDomainMatches(requestUrl.hostname, cookie.domain)) {
+      continue;
+    }
+    if (!cookiePathMatches(requestUrl.pathname, cookie.path || "/")) {
+      continue;
+    }
+
+    cookieMap.set(cookie.name, cookie.value);
+  }
+
+  for (const cookie of manualCookies) {
+    if (!cookie.enabled || !cookie.key) {
+      continue;
+    }
+    cookieMap.set(resolveEnvVariables(cookie.key), resolveEnvVariables(cookie.value));
+  }
+
+  if (cookieMap.size === 0) {
+    return null;
+  }
+
+  return Array.from(cookieMap.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
+}
+
+function persistCookiesFromResponse(
+  headers: Record<string, string>,
+  requestUrl: URL
+): void {
+  const responseCookies = parseSetCookieHeaders(headers);
+  for (const cookie of responseCookies) {
+    if (!cookie.name) {
+      continue;
+    }
+
+    addCookieEntry({
+      id: uid(),
+      name: cookie.name,
+      value: cookie.value,
+      domain: normalizeCookieDomain(cookie.domain || requestUrl.hostname),
+      path: cookie.path || "/",
+      expires: cookie.expires || "Infinity",
+      httpOnly: cookie.httpOnly,
+      secure: cookie.secure,
+      sameSite: cookie.sameSite || "",
+    });
+  }
+}
+
+function formatWebSocketMessage(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof Blob) {
+    return `[binary ${data.size} bytes]`;
+  }
+  if (data instanceof ArrayBuffer) {
+    return `[binary ${data.byteLength} bytes]`;
+  }
+  if (ArrayBuffer.isView(data)) {
+    return `[binary ${data.byteLength} bytes]`;
+  }
+  return String(data);
+}
 
 function RequestSettingsDialog() {
   const tab = useActiveTab();
@@ -282,6 +505,20 @@ export function RequestBar() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      for (const [id, socket] of activeWebSocketRequests.entries()) {
+        if (
+          socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING
+        ) {
+          socket.close(1000, "Unmount");
+        }
+        activeWebSocketRequests.delete(id);
+      }
+    };
+  }, []);
+
   if (!tab) return null;
 
   const isGrpc = (tab.requestType ?? "http") === "grpc";
@@ -297,10 +534,179 @@ export function RequestBar() {
 
   const handleCancel = async () => {
     if (store.activeRequestId) {
+      const ws = activeWebSocketRequests.get(store.activeRequestId);
+      if (ws) {
+        ws.close(1000, "Cancelled by user");
+        return;
+      }
+
       await cancelHttpRequest(store.activeRequestId);
       setIsLoading(false);
       setActiveRequestId(null);
     }
+  };
+
+  const sendWebsocketRequest = async () => {
+    if (!tab.url.trim()) return;
+
+    const requestId = uid();
+    const resolvedUrl = resolveEnvVariables(tab.url);
+    const protocols = (tab.wsProtocols || "")
+      .split(",")
+      .map((p) => resolveEnvVariables(p.trim()))
+      .filter(Boolean);
+    const settings = tab.settings || defaultSettings();
+    const timeoutMs = settings.timeoutMs > 0 ? settings.timeoutMs : 10000;
+    const connectionId = addWsConnection(resolvedUrl, protocols.join(","));
+
+    setIsLoading(true);
+    setActiveRequestId(requestId);
+    setResponse(null);
+    setAssertionResults([]);
+
+    const startedAt = performance.now();
+    const transcript: string[] = [];
+    const requestMessage = resolveEnvVariables(tab.wsMessage ?? "");
+
+    let socket: WebSocket;
+    try {
+      socket = protocols.length > 0
+        ? new WebSocket(resolvedUrl, protocols)
+        : new WebSocket(resolvedUrl);
+    } catch (error) {
+      updateWsConnection(connectionId, { status: "error" });
+      removeWsConnection(connectionId);
+      setResponse({
+        status: 0,
+        statusText: "WebSocket Error",
+        headers: {},
+        body: error instanceof Error ? error.message : "Failed to create WebSocket connection",
+        time: 0,
+        size: 0,
+        contentType: "text/plain",
+      });
+      setIsLoading(false);
+      setActiveRequestId(null);
+      return;
+    }
+
+    activeWebSocketRequests.set(requestId, socket);
+
+    await new Promise<void>((resolve) => {
+      let done = false;
+
+      const finalize = (
+        status: number,
+        statusText: string,
+        extraHeaders: Record<string, string> = {}
+      ) => {
+        if (done) return;
+        done = true;
+
+        activeWebSocketRequests.delete(requestId);
+        removeWsConnection(connectionId);
+
+        const body = transcript.length > 0 ? transcript.join("\n") : "No messages received.";
+        const elapsed = Math.round(performance.now() - startedAt);
+        const size = new TextEncoder().encode(body).length;
+
+        setResponse({
+          status,
+          statusText,
+          headers: {
+            "x-getman-transport": "websocket",
+            ...extraHeaders,
+          },
+          body,
+          time: elapsed,
+          size,
+          contentType: "text/plain",
+        });
+
+        addHistoryItem({
+          id: uid(),
+          method: "GET",
+          url: tab.url,
+          status,
+          time: elapsed,
+          timestamp: Date.now(),
+          requestType: "websocket",
+        });
+
+        setIsLoading(false);
+        setActiveRequestId(null);
+        resolve();
+      };
+
+      const timeoutId = window.setTimeout(() => {
+        if (
+          socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING
+        ) {
+          socket.close(1000, "Timeout");
+        }
+      }, timeoutMs);
+
+      socket.onopen = () => {
+        updateWsConnection(connectionId, { status: "connected" });
+
+        if (requestMessage.trim()) {
+          socket.send(requestMessage);
+          addWsMessage(connectionId, {
+            id: uid(),
+            direction: "sent",
+            data: requestMessage,
+            timestamp: Date.now(),
+          });
+          transcript.push(`>>> ${requestMessage}`);
+        }
+      };
+
+      socket.onmessage = (event) => {
+        const message = formatWebSocketMessage(event.data);
+        addWsMessage(connectionId, {
+          id: uid(),
+          direction: "received",
+          data: message,
+          timestamp: Date.now(),
+        });
+        transcript.push(`<<< ${message}`);
+
+        if (requestMessage.trim()) {
+          socket.close(1000, "Message received");
+        }
+      };
+
+      socket.onerror = () => {
+        updateWsConnection(connectionId, { status: "error" });
+      };
+
+      socket.onclose = (event) => {
+        window.clearTimeout(timeoutId);
+        updateWsConnection(connectionId, {
+          status: event.wasClean ? "disconnected" : "error",
+        });
+
+        const timedOut = event.reason === "Timeout";
+        const cancelled = event.reason === "Cancelled by user";
+        const received = event.reason === "Message received";
+        const status = event.wasClean && !timedOut ? 101 : 0;
+        const statusText = timedOut
+          ? "WebSocket Timeout"
+          : cancelled
+            ? "WebSocket Cancelled"
+            : received
+              ? "WebSocket Message Received"
+              : event.wasClean
+                ? "WebSocket Closed"
+                : "WebSocket Error";
+
+        finalize(status, statusText, {
+          "x-websocket-close-code": String(event.code),
+          ...(event.reason ? { "x-websocket-close-reason": event.reason } : {}),
+        });
+      };
+    });
   };
 
   const sendGrpc = async () => {
@@ -396,16 +802,14 @@ export function RequestBar() {
         }
       }
 
-      // Cookies
-      const cookies = tab.cookies ?? [];
-      const cookieParts: string[] = [];
-      for (const c of cookies) {
-        if (c.enabled && c.key) {
-          cookieParts.push(`${resolveEnvVariables(c.key)}=${resolveEnvVariables(c.value)}`);
-        }
-      }
-      if (cookieParts.length > 0) {
-        headers["Cookie"] = cookieParts.join("; ");
+      // Cookie jar + manual cookies
+      const cookieHeader = buildCookieHeaderValue(
+        url,
+        store.cookieJar,
+        tab.cookies ?? []
+      );
+      if (cookieHeader) {
+        headers["Cookie"] = cookieHeader;
       }
 
       // Auth headers
@@ -472,7 +876,7 @@ export function RequestBar() {
 
       const settings = tab.settings || defaultSettings();
 
-      const data = await sendHttpRequest({
+      let payload: SendRequestPayload = {
         url: url.toString(),
         method: tab.method,
         headers,
@@ -483,14 +887,32 @@ export function RequestBar() {
         retryDelayMs: settings.retryDelayMs,
         proxyUrl: settings.proxyUrl || undefined,
         verifySsl: settings.verifySsl,
-      });
-      setResponse(data);
+      };
 
-      // Run assertions
+      payload = executePreRequestScript(tab.preRequestScript || "", payload);
+      payload = await applyAdvancedAuth(payload, tab);
+
+      const data = await sendHttpRequest(payload);
+      setResponse(data);
+      persistCookiesFromResponse(data.headers, new URL(payload.url));
+
+      const results: AssertionResult[] = [];
       if (tab.assertions && tab.assertions.length > 0) {
-        const results = runAssertions(tab.assertions, data);
-        setAssertionResults(results);
+        results.push(...runAssertions(tab.assertions, data));
       }
+      results.push(
+        ...executePostResponseScript(
+          tab.testScript || "",
+          {
+            method: payload.method,
+            url: payload.url,
+            headers: payload.headers,
+            body: payload.body,
+          },
+          data
+        )
+      );
+      setAssertionResults(results);
 
       addHistoryItem({
         id: uid(),
@@ -500,12 +922,16 @@ export function RequestBar() {
         time: data.time,
         timestamp: Date.now(),
       });
-    } catch {
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to connect. Check the URL and try again.";
       setResponse({
         status: 0,
-        statusText: "Network Error",
+        statusText: "Error",
         headers: {},
-        body: "Failed to connect. Check the URL and try again.",
+        body: message,
         time: 0,
         size: 0,
         contentType: "text/plain",
@@ -549,6 +975,15 @@ export function RequestBar() {
         headers["Authorization"] = `Bearer ${resolveEnvVariables(tab.oauth2AccessToken)}`;
       }
 
+      const cookieHeader = buildCookieHeaderValue(
+        url,
+        store.cookieJar,
+        tab.cookies ?? []
+      );
+      if (cookieHeader) {
+        headers["Cookie"] = cookieHeader;
+      }
+
       headers["Content-Type"] = headers["Content-Type"] || "application/json";
       let variables = {};
       try {
@@ -563,7 +998,7 @@ export function RequestBar() {
 
       const settings = tab.settings || defaultSettings();
 
-      const data = await sendHttpRequest({
+      let payload: SendRequestPayload = {
         url: url.toString(),
         method: "POST",
         headers,
@@ -574,8 +1009,26 @@ export function RequestBar() {
         retryDelayMs: settings.retryDelayMs,
         proxyUrl: settings.proxyUrl || undefined,
         verifySsl: settings.verifySsl,
-      });
+      };
+
+      payload = executePreRequestScript(tab.preRequestScript || "", payload);
+      payload = await applyAdvancedAuth(payload, tab);
+
+      const data = await sendHttpRequest(payload);
       setResponse(data);
+      persistCookiesFromResponse(data.headers, new URL(payload.url));
+
+      const results = executePostResponseScript(
+        tab.testScript || "",
+        {
+          method: payload.method,
+          url: payload.url,
+          headers: payload.headers,
+          body: payload.body,
+        },
+        data
+      );
+      setAssertionResults(results);
 
       addHistoryItem({
         id: uid(),
@@ -586,12 +1039,16 @@ export function RequestBar() {
         timestamp: Date.now(),
         requestType: "graphql",
       });
-    } catch {
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to connect. Check the URL and try again.";
       setResponse({
         status: 0,
-        statusText: "Network Error",
+        statusText: "Error",
         headers: {},
-        body: "Failed to connect. Check the URL and try again.",
+        body: message,
         time: 0,
         size: 0,
         contentType: "text/plain",
@@ -602,7 +1059,13 @@ export function RequestBar() {
     }
   };
 
-  const handleSend = isGrpc ? sendGrpc : isGraphql ? sendGraphqlRequest : sendRequest;
+  const handleSend = isGrpc
+    ? sendGrpc
+    : isGraphql
+      ? sendGraphqlRequest
+      : isWebsocket
+        ? sendWebsocketRequest
+        : sendRequest;
   sendRef.current = handleSend;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

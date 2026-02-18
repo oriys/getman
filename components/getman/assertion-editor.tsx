@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2, CheckCircle2, XCircle } from "lucide-react";
+import { Plus, Trash2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
 import {
   useActiveTab,
   useGetmanStore,
@@ -8,6 +8,7 @@ import {
   uid,
   type TestAssertion,
   type AssertionType,
+  type ResponseData,
 } from "@/lib/getman-store";
 import {
   Select,
@@ -45,9 +46,77 @@ function createEmptyAssertion(): TestAssertion {
   };
 }
 
+function createSuggestedAssertion(partial: Partial<TestAssertion>): TestAssertion {
+  return {
+    id: uid(),
+    enabled: true,
+    type: "status",
+    property: "",
+    comparison: "eq",
+    expected: "",
+    ...partial,
+  };
+}
+
+function buildSuggestedAssertions(response: ResponseData): TestAssertion[] {
+  const suggestions: TestAssertion[] = [
+    createSuggestedAssertion({
+      type: "status",
+      comparison: "eq",
+      expected: String(response.status),
+    }),
+  ];
+
+  const contentType = response.contentType || "";
+  if (contentType) {
+    suggestions.push(
+      createSuggestedAssertion({
+        type: "header",
+        property: "content-type",
+        comparison: "contains",
+        expected: contentType.split(";")[0].trim(),
+      })
+    );
+  }
+
+  if (contentType.toLowerCase().includes("json")) {
+    try {
+      const parsed = JSON.parse(response.body || "null");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const keys = Object.keys(parsed).slice(0, 3);
+        for (const key of keys) {
+          suggestions.push(
+            createSuggestedAssertion({
+              type: "jsonpath",
+              property: `$.${key}`,
+              comparison: "exists",
+              expected: "",
+            })
+          );
+        }
+      }
+    } catch {
+      // ignore invalid json
+    }
+  } else {
+    const snippet = response.body.trim().slice(0, 40);
+    if (snippet) {
+      suggestions.push(
+        createSuggestedAssertion({
+          type: "body-contains",
+          comparison: "contains",
+          expected: snippet,
+        })
+      );
+    }
+  }
+
+  return suggestions;
+}
+
 export function AssertionEditor() {
   const tab = useActiveTab();
-  const { assertionResults } = useGetmanStore();
+  const { assertionResults, response } = useGetmanStore();
   if (!tab) return null;
 
   const assertions = tab.assertions || [];
@@ -58,6 +127,24 @@ export function AssertionEditor() {
 
   const addAssertion = () => {
     updateAssertions([...assertions, createEmptyAssertion()]);
+  };
+
+  const suggestAssertions = () => {
+    if (!response) return;
+    const suggestions = buildSuggestedAssertions(response);
+    const existingSignatures = new Set(
+      assertions.map((a) => `${a.type}|${a.property}|${a.comparison}|${a.expected}`)
+    );
+    const merged = [
+      ...assertions,
+      ...suggestions.filter(
+        (suggestion) =>
+          !existingSignatures.has(
+            `${suggestion.type}|${suggestion.property}|${suggestion.comparison}|${suggestion.expected}`
+          )
+      ),
+    ];
+    updateAssertions(merged);
   };
 
   const removeAssertion = (id: string) => {
@@ -76,14 +163,25 @@ export function AssertionEditor() {
         <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
           Test Assertions
         </span>
-        <button
-          type="button"
-          onClick={addAssertion}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <Plus className="h-3 w-3" />
-          Add
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={suggestAssertions}
+            disabled={!response}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+          >
+            <Sparkles className="h-3 w-3" />
+            AI Suggest
+          </button>
+          <button
+            type="button"
+            onClick={addAssertion}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Plus className="h-3 w-3" />
+            Add
+          </button>
+        </div>
       </div>
 
       {assertions.length === 0 && (

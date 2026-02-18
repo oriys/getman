@@ -105,6 +105,7 @@ interface ParsedCurl {
   body: string | undefined;
   formFields: { key: string; value: string }[];
   user: string | undefined;          // -u / --user
+  authMode: "none" | "basic" | "digest" | "ntlm";
   isFormData: boolean;               // -F / --form
   compressed: boolean;               // --compressed
 }
@@ -118,6 +119,7 @@ function parseCurlTokens(tokens: string[]): ParsedCurl {
   let body: string | undefined;
   const formFields: { key: string; value: string }[] = [];
   let user: string | undefined;
+  let authMode: "none" | "basic" | "digest" | "ntlm" = "none";
   let isFormData = false;
   let compressed = false;
 
@@ -177,6 +179,13 @@ function parseCurlTokens(tokens: string[]): ParsedCurl {
       if (i < tokens.length) {
         user = tokens[i];
       }
+      if (authMode === "none") {
+        authMode = "basic";
+      }
+    } else if (token === "--digest") {
+      authMode = "digest";
+    } else if (token === "--ntlm") {
+      authMode = "ntlm";
     } else if (token === "--compressed") {
       compressed = true;
     } else if (token === "-A" || token === "--user-agent") {
@@ -234,6 +243,7 @@ function parseCurlTokens(tokens: string[]): ParsedCurl {
     body,
     formFields,
     user,
+    authMode,
     isFormData,
     compressed,
   };
@@ -329,12 +339,34 @@ export function parseCurlCommand(curlString: string): RequestTab {
   // Basic auth via -u flag
   if (parsed.user) {
     const colonIdx = parsed.user.indexOf(":");
-    tab.authType = "basic";
+    tab.authType =
+      parsed.authMode === "digest"
+        ? "digest"
+        : parsed.authMode === "ntlm"
+          ? "ntlm"
+          : "basic";
     if (colonIdx !== -1) {
-      tab.authUsername = parsed.user.slice(0, colonIdx);
+      const userPart = parsed.user.slice(0, colonIdx);
       tab.authPassword = parsed.user.slice(colonIdx + 1);
+      if (tab.authType === "ntlm" && userPart.includes("\\")) {
+        const slashIndex = userPart.indexOf("\\");
+        const domain = userPart.slice(0, slashIndex);
+        const username = userPart.slice(slashIndex + 1);
+        if (domain) tab.ntlmDomain = domain;
+        tab.authUsername = username || userPart;
+      } else {
+        tab.authUsername = userPart;
+      }
     } else {
-      tab.authUsername = parsed.user;
+      if (tab.authType === "ntlm" && parsed.user.includes("\\")) {
+        const slashIndex = parsed.user.indexOf("\\");
+        const domain = parsed.user.slice(0, slashIndex);
+        const username = parsed.user.slice(slashIndex + 1);
+        if (domain) tab.ntlmDomain = domain;
+        tab.authUsername = username || parsed.user;
+      } else {
+        tab.authUsername = parsed.user;
+      }
     }
   }
 

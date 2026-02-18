@@ -7,11 +7,22 @@
  * with optional CSV/JSON data-driven parameterization.
  */
 
-import type { Collection, SavedRequest, ResponseData, RequestTab } from "./getman-store";
-import { resolveEnvVariables, uid } from "./getman-store";
+import type {
+  Collection,
+  SavedRequest,
+  ResponseData,
+  RequestTab,
+  HttpMethod,
+} from "./getman-store";
+import { resolveEnvVariables, uid, createDefaultTab } from "./getman-store";
 import { sendHttpRequest, type SendRequestPayload } from "./tauri";
 import { runAssertions } from "./assertions";
 import type { AssertionResult } from "./getman-store";
+import {
+  executePreRequestScript,
+  executePostResponseScript,
+} from "./request-scripts";
+import { applyAdvancedAuth } from "./advanced-auth";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -20,11 +31,51 @@ export interface RunnerOptions {
   delayMs: number;
   dataSource?: DataSource;
   iterations: number;
+  contractGuard?: ContractGuardOptions;
+  trafficRecorder?: TrafficRecorderOptions;
+  chaos?: ChaosOptions;
+  performanceLab?: PerformanceLabOptions;
 }
 
 export interface DataSource {
   type: "csv" | "json";
   content: string;
+}
+
+export interface ContractGuardOptions {
+  enabled: boolean;
+  breakOnDrift: boolean;
+  autoUpdateBaseline: boolean;
+}
+
+export interface TrafficRecorderOptions {
+  enabled: boolean;
+}
+
+export interface ChaosOptions {
+  enabled: boolean;
+  level: "light" | "aggressive";
+}
+
+export interface PerformanceLabOptions {
+  enabled: boolean;
+  regressionThresholdPct: number;
+  autoUpdateBaseline: boolean;
+}
+
+export interface ContractDriftIssue {
+  requestId: string;
+  requestName: string;
+  kind: "new" | "changed";
+  previousSignature?: string;
+  currentSignature: string;
+}
+
+export interface DurationMetrics {
+  avg: number;
+  p50: number;
+  p95: number;
+  p99: number;
 }
 
 export interface RunnerRequestResult {
@@ -37,6 +88,9 @@ export interface RunnerRequestResult {
   iteration: number;
   dataRow?: Record<string, string>;
   duration: number;
+  skipped?: boolean;
+  skipReason?: string;
+  chaosCase?: string;
 }
 
 export interface RunnerResult {
@@ -44,11 +98,29 @@ export interface RunnerResult {
   totalRequests: number;
   passedRequests: number;
   failedRequests: number;
+  skippedRequests: number;
   totalAssertions: number;
   passedAssertions: number;
   failedAssertions: number;
   totalDuration: number;
   results: RunnerRequestResult[];
+  effectiveMode: "serial" | "parallel";
+  flowOrchestratorUsed: boolean;
+  contractGuardUsed: boolean;
+  contractDrifts: ContractDriftIssue[];
+  contractGateFailed: boolean;
+  contractBaselineUpdated: boolean;
+  trafficRecorderUsed: boolean;
+  recordedCollection?: Collection;
+  chaosUsed: boolean;
+  chaosLevel: "none" | "light" | "aggressive";
+  chaosCaseCount: number;
+  performanceLabUsed: boolean;
+  performanceMetrics?: DurationMetrics;
+  performanceBaseline?: DurationMetrics;
+  performanceRegressionPct?: number;
+  performanceGateFailed: boolean;
+  performanceBaselineUpdated: boolean;
 }
 
 export type RunnerProgressCallback = (current: number, total: number, result: RunnerRequestResult) => void;
@@ -96,6 +168,165 @@ function parseDataSource(source?: DataSource): Record<string, string>[] {
   return [{}];
 }
 
+const CONTRACT_BASELINE_PREFIX = "getman.contract.baseline.v1.";
+const PERFORMANCE_BASELINE_PREFIX = "getman.performance.baseline.v1.";
+const HTTP_METHODS: HttpMethod[] = [
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
+];
+type ChaosCase = "strip-body" | "drop-auth" | "invalid-json" | "random-method";
+
+function getChaosCases(options?: ChaosOptions): ChaosCase[] {
+  if (!options?.enabled) return [];
+  return options.level === "aggressive"
+    ? ["strip-body", "drop-auth", "invalid-json", "random-method"]
+    : ["strip-body", "drop-auth"];
+}
+
+function normalizeMethod(method: string): HttpMethod {
+  return HTTP_METHODS.includes(method as HttpMethod) ? (method as HttpMethod) : "GET";
+}
+
+function loadLocalStorageJson<T>(key: string): T | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return undefined;
+    return JSON.parse(raw) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveLocalStorageJson(key: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // noop
+  }
+}
+
+function normalizeContentType(contentType?: string): string {
+  return (contentType || "application/octet-stream").split(";")[0].trim().toLowerCase();
+}
+
+function inferContractShape(value: unknown): unknown {
+  if (value === null) return "null";
+  if (Array.isArray(value)) {
+    return value.length === 0 ? ["array", "empty"] : ["array", inferContractShape(value[0])];
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => [k, inferContractShape(v)]);
+    return Object.fromEntries(entries);
+  }
+  return typeof value;
+}
+
+function buildContractSignature(response: ResponseData): string {
+  const contentType = normalizeContentType(response.contentType);
+  let bodyShape: unknown = typeof response.body;
+  if (contentType.includes("json")) {
+    try {
+      bodyShape = inferContractShape(JSON.parse(response.body || "null"));
+    } catch {
+      bodyShape = "invalid-json";
+    }
+  }
+  return JSON.stringify({
+    status: response.status,
+    contentType,
+    bodyShape,
+  });
+}
+
+function percentile(sortedValues: number[], pct: number): number {
+  if (sortedValues.length === 0) return 0;
+  const index = Math.min(
+    sortedValues.length - 1,
+    Math.max(0, Math.ceil((pct / 100) * sortedValues.length) - 1)
+  );
+  return sortedValues[index];
+}
+
+function computeDurationMetrics(values: number[]): DurationMetrics | undefined {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  const sum = sorted.reduce((acc, v) => acc + v, 0);
+  return {
+    avg: Math.round(sum / sorted.length),
+    p50: Math.round(percentile(sorted, 50)),
+    p95: Math.round(percentile(sorted, 95)),
+    p99: Math.round(percentile(sorted, 99)),
+  };
+}
+
+function applyChaosCase(payload: SendRequestPayload, chaosCase: ChaosCase): SendRequestPayload {
+  const mutated: SendRequestPayload = {
+    ...payload,
+    headers: { ...payload.headers },
+  };
+  if (chaosCase === "strip-body") {
+    mutated.body = undefined;
+    delete mutated.headers["Content-Type"];
+    delete mutated.headers["content-type"];
+  } else if (chaosCase === "drop-auth") {
+    delete mutated.headers["Authorization"];
+    delete mutated.headers["authorization"];
+    delete mutated.headers["X-Api-Key"];
+    delete mutated.headers["x-api-key"];
+  } else if (chaosCase === "invalid-json") {
+    mutated.headers["Content-Type"] = mutated.headers["Content-Type"] || "application/json";
+    mutated.body = '{"invalidJson":';
+  } else if (chaosCase === "random-method") {
+    mutated.method = "TRACE";
+  }
+  return mutated;
+}
+
+function buildRecordedCollection(
+  sourceCollection: Collection,
+  results: RunnerRequestResult[]
+): Collection | undefined {
+  const recorded = results.filter((r) => !r.skipped && !r.chaosCase);
+  if (recorded.length === 0) return undefined;
+  const requests: SavedRequest[] = recorded.map((item, index) => {
+    const tab = createDefaultTab();
+    tab.method = normalizeMethod(item.method);
+    tab.url = item.url;
+    tab.assertions = [
+      {
+        id: uid(),
+        type: "status",
+        property: "",
+        comparison: "eq",
+        expected: String(item.response.status),
+        enabled: true,
+      },
+    ];
+    return {
+      id: uid(),
+      name: `${item.requestName} [recorded ${index + 1}]`,
+      method: tab.method,
+      url: tab.url,
+      tab,
+    };
+  });
+  return {
+    id: uid(),
+    name: `${sourceCollection.name} [Recorded]`,
+    requests,
+    folders: [],
+  };
+}
+
 // ─── Variable Substitution ──────────────────────────────────────────────────
 
 function substituteDataVariables(input: string, data: Record<string, string>): string {
@@ -127,6 +358,17 @@ function buildPayloadFromTab(tab: RequestTab, dataRow: Record<string, string>): 
     headers["Authorization"] = `Basic ${encoded}`;
   } else if (tab.authType === "api-key" && tab.authApiAddTo === "header") {
     headers[resolveAll(tab.authApiKey)] = resolveAll(tab.authApiValue);
+  }
+
+  // Cookies
+  const cookieParts: string[] = [];
+  for (const c of tab.cookies ?? []) {
+    if (c.enabled && c.key) {
+      cookieParts.push(`${resolveAll(c.key)}=${resolveAll(c.value)}`);
+    }
+  }
+  if (cookieParts.length > 0) {
+    headers["Cookie"] = cookieParts.join("; ");
   }
 
   let body: string | undefined;
@@ -173,13 +415,167 @@ function getAllRequests(collection: Collection): SavedRequest[] {
   return reqs;
 }
 
+function parseFlowDependencies(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function hasFlowRules(tab: RequestTab): boolean {
+  return Boolean(tab.flowDependsOn?.trim() || tab.flowCondition?.trim());
+}
+
+function isFlowSuccess(result: RunnerRequestResult): boolean {
+  if (result.skipped) {
+    return false;
+  }
+  if (result.response.status < 200 || result.response.status >= 400) {
+    return false;
+  }
+  return result.assertionResults.every((assertion) => assertion.passed);
+}
+
+function createSkippedResult(
+  req: SavedRequest,
+  iteration: number,
+  dataRow: Record<string, string>,
+  reason: string,
+  chaosCase?: ChaosCase
+): RunnerRequestResult {
+  return {
+    requestId: req.id,
+    requestName: req.name,
+    method: req.method,
+    url: req.url,
+    response: {
+      status: 0,
+      statusText: "Skipped",
+      headers: {},
+      body: reason,
+      time: 0,
+      size: reason.length,
+      contentType: "text/plain",
+    },
+    assertionResults: [],
+    iteration,
+    dataRow: Object.keys(dataRow).length > 0 ? dataRow : undefined,
+    duration: 0,
+    skipped: true,
+    skipReason: reason,
+    chaosCase,
+  };
+}
+
+function getFlowSkipReason(
+  req: SavedRequest,
+  iteration: number,
+  dataRow: Record<string, string>,
+  resultById: Map<string, RunnerRequestResult>,
+  resultByName: Map<string, RunnerRequestResult>
+): string | null {
+  const dependencies = parseFlowDependencies(req.tab.flowDependsOn || "");
+  const deps: Record<string, RunnerRequestResult> = {};
+  const missing: string[] = [];
+  const failed: string[] = [];
+
+  for (const dep of dependencies) {
+    const depResult = resultById.get(dep) ?? resultByName.get(dep.toLowerCase());
+    if (!depResult) {
+      missing.push(dep);
+      continue;
+    }
+    deps[dep] = depResult;
+    if (!isFlowSuccess(depResult)) {
+      failed.push(dep);
+    }
+  }
+
+  if (missing.length > 0) {
+    return `Missing dependency: ${missing.join(", ")}`;
+  }
+  if (failed.length > 0) {
+    return `Dependency not successful: ${failed.join(", ")}`;
+  }
+
+  const condition = (req.tab.flowCondition || "").trim();
+  if (!condition) {
+    return null;
+  }
+
+  try {
+    const evaluator = new Function(
+      "data",
+      "iteration",
+      "deps",
+      "results",
+      `"use strict"; return (${condition});`
+    );
+    const conditionMatched = Boolean(
+      evaluator(
+        dataRow,
+        iteration,
+        deps,
+        Array.from(resultById.values())
+      )
+    );
+    if (!conditionMatched) {
+      return "Flow condition evaluated to false";
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown flow condition error";
+    return `Flow condition error: ${message}`;
+  }
+
+  return null;
+}
+
 async function runSingleRequest(
   req: SavedRequest,
   iteration: number,
-  dataRow: Record<string, string>
+  dataRow: Record<string, string>,
+  chaosCase?: ChaosCase
 ): Promise<RunnerRequestResult> {
-  const payload = buildPayloadFromTab(req.tab, dataRow);
+  let payload = buildPayloadFromTab(req.tab, dataRow);
   const start = performance.now();
+
+  try {
+    payload = executePreRequestScript(req.tab.preRequestScript || "", payload);
+    payload = await applyAdvancedAuth(payload, req.tab);
+    if (chaosCase) {
+      payload = applyChaosCase(payload, chaosCase);
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Pre-request script failed";
+    const scriptFailure: AssertionResult = {
+      assertionId: `script-${uid()}`,
+      passed: false,
+      actual: "",
+      message: `[Script] runtime: ${message}`,
+    };
+    return {
+      requestId: req.id,
+      requestName: req.name,
+      method: payload.method,
+      url: payload.url,
+      response: {
+        status: 0,
+        statusText: "Script Error",
+        headers: {},
+        body: message,
+        time: 0,
+        size: message.length,
+        contentType: "text/plain",
+      },
+      assertionResults: [scriptFailure],
+      iteration,
+      dataRow: Object.keys(dataRow).length > 0 ? dataRow : undefined,
+      duration: Math.round(performance.now() - start),
+      chaosCase,
+    };
+  }
 
   const response: ResponseData = await sendHttpRequest(payload);
   const duration = Math.round(performance.now() - start);
@@ -187,17 +583,30 @@ async function runSingleRequest(
   const assertionResults = req.tab.assertions
     ? runAssertions(req.tab.assertions, response)
     : [];
+  assertionResults.push(
+    ...executePostResponseScript(
+      req.tab.testScript || "",
+      {
+        method: payload.method,
+        url: payload.url,
+        headers: payload.headers,
+        body: payload.body,
+      },
+      response
+    )
+  );
 
   return {
     requestId: req.id,
     requestName: req.name,
-    method: req.method,
-    url: req.url,
+    method: payload.method,
+    url: payload.url,
     response,
     assertionResults,
     iteration,
     dataRow: Object.keys(dataRow).length > 0 ? dataRow : undefined,
     duration,
+    chaosCase,
   };
 }
 
@@ -208,20 +617,45 @@ export async function runCollection(
   signal?: AbortSignal,
 ): Promise<RunnerResult> {
   const requests = getAllRequests(collection);
+  const flowOrchestratorUsed = requests.some((req) => hasFlowRules(req.tab));
+  const effectiveMode =
+    flowOrchestratorUsed && options.mode === "parallel"
+      ? "serial"
+      : options.mode;
   const dataRows = parseDataSource(options.dataSource);
   const iterations = Math.max(1, options.iterations || dataRows.length);
-  const totalRequests = requests.length * iterations;
+  const chaosCases = getChaosCases(options.chaos);
+  const totalRequests = requests.length * (1 + chaosCases.length) * iterations;
+  const contractGuardUsed = Boolean(options.contractGuard?.enabled);
+  const trafficRecorderUsed = Boolean(options.trafficRecorder?.enabled);
+  const performanceLabUsed = Boolean(options.performanceLab?.enabled);
   const results: RunnerRequestResult[] = [];
   const startTime = performance.now();
   let completed = 0;
+  const currentContractSignatures: Record<string, string> = {};
+
+  const contractBaselineKey = `${CONTRACT_BASELINE_PREFIX}${collection.id}`;
+  const previousContractBaseline =
+    contractGuardUsed
+      ? loadLocalStorageJson<Record<string, string>>(contractBaselineKey) || {}
+      : {};
 
   for (let iter = 0; iter < iterations; iter++) {
     const dataRow = dataRows[iter % dataRows.length] || {};
+    const resultById = new Map<string, RunnerRequestResult>();
+    const resultByName = new Map<string, RunnerRequestResult>();
 
-    if (options.mode === "parallel") {
-      const promises = requests.map(async (req) => {
+    if (effectiveMode === "parallel") {
+      const jobs = requests.flatMap((req) => [
+        { req, chaosCase: undefined as ChaosCase | undefined },
+        ...chaosCases.map((chaosCase) => ({ req, chaosCase })),
+      ]);
+      const promises = jobs.map(async ({ req, chaosCase }) => {
         if (signal?.aborted) return null;
-        const result = await runSingleRequest(req, iter, dataRow);
+        const result = await runSingleRequest(req, iter, dataRow, chaosCase);
+        if (!result.skipped && !result.chaosCase && contractGuardUsed) {
+          currentContractSignatures[req.id] = buildContractSignature(result.response);
+        }
         completed++;
         onProgress?.(completed, totalRequests, result);
         return result;
@@ -232,13 +666,49 @@ export async function runCollection(
       for (const req of requests) {
         if (signal?.aborted) break;
 
-        const result = await runSingleRequest(req, iter, dataRow);
-        results.push(result);
+        const skipReason = getFlowSkipReason(
+          req,
+          iter,
+          dataRow,
+          resultById,
+          resultByName
+        );
+        const baseResult = skipReason
+          ? createSkippedResult(req, iter, dataRow, skipReason)
+          : await runSingleRequest(req, iter, dataRow);
+
+        if (!baseResult.skipped && contractGuardUsed) {
+          currentContractSignatures[req.id] = buildContractSignature(baseResult.response);
+        }
+
+        resultById.set(req.id, baseResult);
+        resultByName.set(req.name.toLowerCase(), baseResult);
+        results.push(baseResult);
         completed++;
-        onProgress?.(completed, totalRequests, result);
+        onProgress?.(completed, totalRequests, baseResult);
 
         if (options.delayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+        }
+
+        for (const chaosCase of chaosCases) {
+          if (signal?.aborted) break;
+          const chaosResult = baseResult.skipped
+            ? createSkippedResult(
+                req,
+                iter,
+                dataRow,
+                `Base request skipped: ${baseResult.skipReason || "flow gate"}`,
+                chaosCase
+              )
+            : await runSingleRequest(req, iter, dataRow, chaosCase);
+          results.push(chaosResult);
+          completed++;
+          onProgress?.(completed, totalRequests, chaosResult);
+
+          if (options.delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+          }
         }
       }
     }
@@ -248,18 +718,108 @@ export async function runCollection(
   const passedAssertions = results.reduce(
     (sum, r) => sum + r.assertionResults.filter((a) => a.passed).length, 0
   );
-  const failedRequests = results.filter((r) => r.response.status === 0 || r.response.status >= 400).length;
+  const skippedRequests = results.filter((r) => r.skipped).length;
+  const failedRequests = results.filter(
+    (r) => !r.skipped && (r.response.status === 0 || r.response.status >= 400)
+  ).length;
+
+  let contractDrifts: ContractDriftIssue[] = [];
+  let contractGateFailed = false;
+  let contractBaselineUpdated = false;
+  if (contractGuardUsed) {
+    for (const req of requests) {
+      const currentSignature = currentContractSignatures[req.id];
+      if (!currentSignature) continue;
+      const previousSignature = previousContractBaseline[req.id];
+      if (!previousSignature) {
+        contractDrifts.push({
+          requestId: req.id,
+          requestName: req.name,
+          kind: "new",
+          currentSignature,
+        });
+        continue;
+      }
+      if (previousSignature !== currentSignature) {
+        contractDrifts.push({
+          requestId: req.id,
+          requestName: req.name,
+          kind: "changed",
+          previousSignature,
+          currentSignature,
+        });
+      }
+    }
+    contractGateFailed = Boolean(options.contractGuard?.breakOnDrift && contractDrifts.length > 0);
+    if (options.contractGuard?.autoUpdateBaseline) {
+      saveLocalStorageJson(contractBaselineKey, currentContractSignatures);
+      contractBaselineUpdated = true;
+    }
+  }
+
+  const performanceBaselineKey = `${PERFORMANCE_BASELINE_PREFIX}${collection.id}`;
+  const performanceDurations = results
+    .filter((r) => !r.skipped && !r.chaosCase)
+    .map((r) => r.duration);
+  const performanceMetrics = performanceLabUsed
+    ? computeDurationMetrics(performanceDurations)
+    : undefined;
+  const performanceBaseline = performanceLabUsed
+    ? loadLocalStorageJson<DurationMetrics>(performanceBaselineKey)
+    : undefined;
+  const performanceRegressionPct =
+    performanceLabUsed &&
+    performanceMetrics &&
+    performanceBaseline &&
+    performanceBaseline.p95 > 0
+      ? Math.round(((performanceMetrics.p95 - performanceBaseline.p95) / performanceBaseline.p95) * 10000) / 100
+      : undefined;
+  const performanceGateFailed = Boolean(
+    performanceLabUsed &&
+      typeof performanceRegressionPct === "number" &&
+      performanceRegressionPct > (options.performanceLab?.regressionThresholdPct ?? 20)
+  );
+  const performanceBaselineUpdated = Boolean(
+    performanceLabUsed &&
+      options.performanceLab?.autoUpdateBaseline &&
+      performanceMetrics
+  );
+  if (performanceBaselineUpdated && performanceMetrics) {
+    saveLocalStorageJson(performanceBaselineKey, performanceMetrics);
+  }
+
+  const recordedCollection = trafficRecorderUsed
+    ? buildRecordedCollection(collection, results)
+    : undefined;
 
   return {
     collectionName: collection.name,
     totalRequests: results.length,
-    passedRequests: results.length - failedRequests,
+    passedRequests: results.length - failedRequests - skippedRequests,
     failedRequests,
+    skippedRequests,
     totalAssertions,
     passedAssertions,
     failedAssertions: totalAssertions - passedAssertions,
     totalDuration: Math.round(performance.now() - startTime),
     results,
+    effectiveMode,
+    flowOrchestratorUsed,
+    contractGuardUsed,
+    contractDrifts,
+    contractGateFailed,
+    contractBaselineUpdated,
+    trafficRecorderUsed,
+    recordedCollection,
+    chaosUsed: chaosCases.length > 0,
+    chaosLevel: options.chaos?.enabled ? options.chaos.level : "none",
+    chaosCaseCount: chaosCases.length,
+    performanceLabUsed,
+    performanceMetrics,
+    performanceBaseline,
+    performanceRegressionPct,
+    performanceGateFailed,
+    performanceBaselineUpdated,
   };
 }
 
@@ -276,6 +836,21 @@ export function generateTextReport(result: RunnerResult): string {
   lines.push(`  Total Requests:    ${result.totalRequests}`);
   lines.push(`  Passed:            ${result.passedRequests}`);
   lines.push(`  Failed:            ${result.failedRequests}`);
+  lines.push(`  Skipped:           ${result.skippedRequests}`);
+  lines.push(`  Mode:              ${result.effectiveMode}`);
+  lines.push(`  Flow Orchestrator: ${result.flowOrchestratorUsed ? "on" : "off"}`);
+  lines.push(`  Contract Guard:    ${result.contractGuardUsed ? "on" : "off"}`);
+  lines.push(`  Contract Drifts:   ${result.contractDrifts.length}`);
+  lines.push(`  Chaos Engine:      ${result.chaosUsed ? result.chaosLevel : "off"}`);
+  lines.push(`  Performance Lab:   ${result.performanceLabUsed ? "on" : "off"}`);
+  if (result.performanceMetrics) {
+    lines.push(
+      `  Latency (p50/p95/p99): ${result.performanceMetrics.p50}/${result.performanceMetrics.p95}/${result.performanceMetrics.p99}ms`
+    );
+  }
+  if (typeof result.performanceRegressionPct === "number") {
+    lines.push(`  Regression:        ${result.performanceRegressionPct}%`);
+  }
   lines.push(`  Total Assertions:  ${result.totalAssertions}`);
   lines.push(`  Passed Assertions: ${result.passedAssertions}`);
   lines.push(`  Failed Assertions: ${result.failedAssertions}`);
@@ -283,9 +858,21 @@ export function generateTextReport(result: RunnerResult): string {
   lines.push(``);
 
   for (const r of result.results) {
-    const status = r.response.status === 0 ? "ERR" : String(r.response.status);
-    const icon = r.response.status >= 200 && r.response.status < 400 ? "✓" : "✗";
-    lines.push(`  ${icon} [${status}] ${r.method} ${r.url} (${r.duration}ms)`);
+    const status = r.skipped
+      ? "SKIP"
+      : r.response.status === 0
+        ? "ERR"
+        : String(r.response.status);
+    const icon = r.skipped
+      ? "→"
+      : r.response.status >= 200 && r.response.status < 400
+        ? "✓"
+        : "✗";
+    const chaosLabel = r.chaosCase ? ` [chaos:${r.chaosCase}]` : "";
+    lines.push(`  ${icon} [${status}] ${r.method} ${r.url} (${r.duration}ms)${chaosLabel}`);
+    if (r.skipped && r.skipReason) {
+      lines.push(`    ↳ ${r.skipReason}`);
+    }
 
     for (const a of r.assertionResults) {
       const aIcon = a.passed ? "  ✓" : "  ✗";
@@ -294,15 +881,35 @@ export function generateTextReport(result: RunnerResult): string {
   }
 
   lines.push(``);
-  const exitCode = result.failedRequests === 0 && result.failedAssertions === 0 ? 0 : 1;
+  if (result.contractDrifts.length > 0) {
+    lines.push(`Contract Drift Findings:`);
+    for (const drift of result.contractDrifts) {
+      lines.push(`  - ${drift.requestName}: ${drift.kind}`);
+    }
+    lines.push(``);
+  }
+  const exitCode =
+    result.failedRequests === 0 &&
+    result.failedAssertions === 0 &&
+    !result.contractGateFailed &&
+    !result.performanceGateFailed
+      ? 0
+      : 1;
   lines.push(`Exit Code: ${exitCode}`);
 
   return lines.join("\n");
 }
 
 export function generateJsonReport(result: RunnerResult): string {
+  const exitCode =
+    result.failedRequests === 0 &&
+    result.failedAssertions === 0 &&
+    !result.contractGateFailed &&
+    !result.performanceGateFailed
+      ? 0
+      : 1;
   return JSON.stringify({
     ...result,
-    exitCode: result.failedRequests === 0 && result.failedAssertions === 0 ? 0 : 1,
+    exitCode,
   }, null, 2);
 }

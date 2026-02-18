@@ -11,6 +11,11 @@ export interface SendRequestPayload {
   retryDelayMs?: number;
   proxyUrl?: string;
   verifySsl?: boolean;
+  digestUsername?: string;
+  digestPassword?: string;
+  ntlmUsername?: string;
+  ntlmPassword?: string;
+  ntlmDomain?: string;
 }
 
 export interface HttpResponseData {

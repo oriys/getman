@@ -89,6 +89,8 @@ interface PostmanAuth {
   type: string;
   bearer?: { key: string; value: string }[];
   basic?: { key: string; value: string }[];
+  digest?: { key: string; value: string }[];
+  ntlm?: { key: string; value: string }[];
   apikey?: { key: string; value: string }[];
   oauth2?: { key: string; value: string }[];
 }
@@ -166,12 +168,13 @@ function parsePostmanBody(body?: PostmanBody): Pick<RequestTab, "bodyType" | "bo
   }
 }
 
-function parsePostmanAuth(auth?: PostmanAuth): Pick<RequestTab, "authType" | "authToken" | "authUsername" | "authPassword" | "authApiKey" | "authApiValue" | "authApiAddTo"> {
+function parsePostmanAuth(auth?: PostmanAuth): Pick<RequestTab, "authType" | "authToken" | "authUsername" | "authPassword" | "ntlmDomain" | "authApiKey" | "authApiValue" | "authApiAddTo"> {
   const defaults = {
     authType: "none" as RequestTab["authType"],
     authToken: "",
     authUsername: "",
     authPassword: "",
+    ntlmDomain: "",
     authApiKey: "",
     authApiValue: "",
     authApiAddTo: "header" as const,
@@ -188,6 +191,23 @@ function parsePostmanAuth(auth?: PostmanAuth): Pick<RequestTab, "authType" | "au
       const username = auth.basic?.find((v) => v.key === "username")?.value || "";
       const password = auth.basic?.find((v) => v.key === "password")?.value || "";
       return { ...defaults, authType: "basic", authUsername: username, authPassword: password };
+    }
+    case "digest": {
+      const username = auth.digest?.find((v) => v.key === "username")?.value || "";
+      const password = auth.digest?.find((v) => v.key === "password")?.value || "";
+      return { ...defaults, authType: "digest", authUsername: username, authPassword: password };
+    }
+    case "ntlm": {
+      const username = auth.ntlm?.find((v) => v.key === "username")?.value || "";
+      const password = auth.ntlm?.find((v) => v.key === "password")?.value || "";
+      const domain = auth.ntlm?.find((v) => v.key === "domain")?.value || "";
+      return {
+        ...defaults,
+        authType: "ntlm",
+        authUsername: username,
+        authPassword: password,
+        ntlmDomain: domain,
+      };
     }
     case "apikey": {
       const key = auth.apikey?.find((v) => v.key === "key")?.value || "";

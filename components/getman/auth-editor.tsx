@@ -21,8 +21,12 @@ const authTypes: { value: RequestTab["authType"]; label: string }[] = [
   { value: "none", label: "No Auth" },
   { value: "bearer", label: "Bearer Token" },
   { value: "basic", label: "Basic Auth" },
+  { value: "digest", label: "Digest Auth" },
+  { value: "ntlm", label: "NTLM Auth" },
   { value: "api-key", label: "API Key" },
   { value: "oauth2", label: "OAuth 2.0" },
+  { value: "awsv4", label: "AWS SigV4" },
+  { value: "wsse", label: "WSSE Auth" },
 ];
 
 function SensitiveInputField({
@@ -154,6 +158,52 @@ export function AuthEditor() {
         </div>
       )}
 
+      {tab.authType === "digest" && (
+        <div className="flex flex-col gap-3">
+          <InputField
+            label="Username"
+            value={tab.authUsername}
+            onChange={(v) => updateActiveTab({ authUsername: v })}
+            placeholder="Username"
+          />
+          <SensitiveInputField
+            label="Password"
+            value={tab.authPassword}
+            onChange={(v) => updateActiveTab({ authPassword: v })}
+            placeholder="Password"
+          />
+          <p className="text-[10px] text-muted-foreground">
+            Automatically retries 401 Digest challenge with computed authorization.
+          </p>
+        </div>
+      )}
+
+      {tab.authType === "ntlm" && (
+        <div className="flex flex-col gap-3">
+          <InputField
+            label="Username"
+            value={tab.authUsername}
+            onChange={(v) => updateActiveTab({ authUsername: v })}
+            placeholder="username or domain\\username"
+          />
+          <SensitiveInputField
+            label="Password"
+            value={tab.authPassword}
+            onChange={(v) => updateActiveTab({ authPassword: v })}
+            placeholder="Password"
+          />
+          <InputField
+            label="Domain (Optional)"
+            value={tab.ntlmDomain || ""}
+            onChange={(v) => updateActiveTab({ ntlmDomain: v })}
+            placeholder="DOMAIN"
+          />
+          <p className="text-[10px] text-muted-foreground">
+            Performs NTLM handshake; domain can be provided separately or in username.
+          </p>
+        </div>
+      )}
+
       {tab.authType === "api-key" && (
         <div className="flex flex-col gap-3">
           <InputField
@@ -280,6 +330,63 @@ export function AuthEditor() {
               For Client Credentials: the token will be sent automatically with the Token URL.
             </p>
           </div>
+        </div>
+      )}
+
+      {tab.authType === "awsv4" && (
+        <div className="flex flex-col gap-3">
+          <InputField
+            label="Access Key ID"
+            value={tab.awsAccessKeyId || ""}
+            onChange={(v) => updateActiveTab({ awsAccessKeyId: v })}
+            placeholder="AKIA..."
+          />
+          <SensitiveInputField
+            label="Secret Access Key"
+            value={tab.awsSecretAccessKey || ""}
+            onChange={(v) => updateActiveTab({ awsSecretAccessKey: v })}
+            placeholder="AWS secret access key"
+          />
+          <SensitiveInputField
+            label="Session Token (Optional)"
+            value={tab.awsSessionToken || ""}
+            onChange={(v) => updateActiveTab({ awsSessionToken: v })}
+            placeholder="Temporary credentials session token"
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <InputField
+              label="Region"
+              value={tab.awsRegion || "us-east-1"}
+              onChange={(v) => updateActiveTab({ awsRegion: v })}
+              placeholder="us-east-1"
+            />
+            <InputField
+              label="Service"
+              value={tab.awsService || "execute-api"}
+              onChange={(v) => updateActiveTab({ awsService: v })}
+              placeholder="execute-api"
+            />
+          </div>
+        </div>
+      )}
+
+      {tab.authType === "wsse" && (
+        <div className="flex flex-col gap-3">
+          <InputField
+            label="Username"
+            value={tab.wsseUsername || ""}
+            onChange={(v) => updateActiveTab({ wsseUsername: v })}
+            placeholder="WSSE username"
+          />
+          <SensitiveInputField
+            label="Password"
+            value={tab.wssePassword || ""}
+            onChange={(v) => updateActiveTab({ wssePassword: v })}
+            placeholder="WSSE password"
+          />
+          <p className="text-[10px] text-muted-foreground">
+            Sends Authorization + X-WSSE headers with UsernameToken PasswordDigest.
+          </p>
         </div>
       )}
     </div>

@@ -135,6 +135,94 @@ function GrpcMessageEditor() {
   );
 }
 
+function ScriptEditor() {
+  const tab = useActiveTab();
+  if (!tab) return null;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-1 min-h-0 border-b border-border/60">
+        <div className="px-3 py-1.5 border-b border-border/40">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            Pre-request Script (req, api)
+          </span>
+        </div>
+        <textarea
+          className="h-[calc(100%-28px)] w-full resize-none bg-transparent p-3 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+          placeholder={"api.setHeader(\"X-Trace\", \"getman\");\napi.setQueryParam(\"ts\", Date.now().toString());"}
+          value={tab.preRequestScript ?? ""}
+          onChange={(e) => updateActiveTab({ preRequestScript: e.target.value })}
+          spellCheck={false}
+        />
+      </div>
+      <div className="h-[45%] shrink-0">
+        <div className="px-3 py-1.5 border-b border-border/40">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            Post-response Script (req, res, test, expect)
+          </span>
+        </div>
+        <textarea
+          className="h-[calc(100%-28px)] w-full resize-none bg-transparent p-3 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+          placeholder={"test(\"status is 200\", () => {\n  expect(res.status).toBe(200);\n});"}
+          value={tab.testScript ?? ""}
+          onChange={(e) => updateActiveTab({ testScript: e.target.value })}
+          spellCheck={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FlowEditor() {
+  const tab = useActiveTab();
+  if (!tab) return null;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-3 py-1.5 border-b border-border/40">
+        <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+          Flow Orchestrator
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-3 p-3">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[11px] font-medium text-muted-foreground">
+            Depends On (request IDs or names)
+          </label>
+          <textarea
+            className="h-24 rounded border border-border bg-[hsl(var(--surface-1))] px-3 py-2 font-mono text-xs text-foreground outline-none resize-none placeholder:text-muted-foreground/40 focus:border-primary/50"
+            placeholder={"login\nget-profile, refresh-token"}
+            value={tab.flowDependsOn ?? ""}
+            onChange={(e) => updateActiveTab({ flowDependsOn: e.target.value })}
+            spellCheck={false}
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[11px] font-medium text-muted-foreground">
+            Run Condition (JavaScript expression, optional)
+          </label>
+          <textarea
+            className="h-28 rounded border border-border bg-[hsl(var(--surface-1))] px-3 py-2 font-mono text-xs text-foreground outline-none resize-none placeholder:text-muted-foreground/40 focus:border-primary/50"
+            placeholder={"data.role === 'admin' && deps.login?.response.status === 200"}
+            value={tab.flowCondition ?? ""}
+            onChange={(e) => updateActiveTab({ flowCondition: e.target.value })}
+            spellCheck={false}
+          />
+        </div>
+
+        <p className="text-[10px] text-muted-foreground">
+          Context: <span className="font-mono">data</span>,{" "}
+          <span className="font-mono">iteration</span>,{" "}
+          <span className="font-mono">deps</span>,{" "}
+          <span className="font-mono">results</span>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function RequestEditor() {
   const tab = useActiveTab();
   if (!tab) return null;
@@ -147,6 +235,12 @@ export function RequestEditor() {
   const enabledHeaders = tab.headers.filter((h) => h.enabled && h.key).length;
   const enabledCookies = (tab.cookies ?? []).filter((c) => c.enabled && c.key).length;
   const assertionCount = (tab.assertions ?? []).length;
+  const scriptCount =
+    (tab.preRequestScript?.trim() ? 1 : 0) +
+    (tab.testScript?.trim() ? 1 : 0);
+  const flowCount =
+    (tab.flowDependsOn?.trim() ? 1 : 0) +
+    (tab.flowCondition?.trim() ? 1 : 0);
   const enabledMetadata = (tab.grpcMetadata ?? []).filter((m) => m.enabled && m.key).length;
 
   if (isGrpc) {
@@ -199,11 +293,13 @@ export function RequestEditor() {
     return (
       <Tabs defaultValue="query" className="flex flex-col h-full">
         <TabsList className="h-auto shrink-0 gap-1 border-b border-border bg-[hsl(var(--surface-2))] p-1.5">
-          {[
-            { value: "query", label: "Query" },
-            { value: "headers", label: "Headers", count: enabledHeaders },
-            { value: "auth", label: "Auth" },
-          ].map((t) => (
+            {[
+              { value: "query", label: "Query" },
+              { value: "headers", label: "Headers", count: enabledHeaders },
+              { value: "auth", label: "Auth" },
+              { value: "scripts", label: "Scripts", count: scriptCount },
+              { value: "flow", label: "Flow", count: flowCount },
+            ].map((t) => (
             <TabsTrigger
               key={t.value}
               value={t.value}
@@ -264,6 +360,14 @@ export function RequestEditor() {
 
           <TabsContent value="auth" className="m-0 h-full">
             <AuthEditor />
+          </TabsContent>
+
+          <TabsContent value="scripts" className="m-0 h-full">
+            <ScriptEditor />
+          </TabsContent>
+
+          <TabsContent value="flow" className="m-0 h-full">
+            <FlowEditor />
           </TabsContent>
         </div>
       </Tabs>
@@ -347,6 +451,8 @@ export function RequestEditor() {
           { value: "auth", label: "Auth" },
           { value: "cookies", label: "Cookies", count: enabledCookies },
           { value: "tests", label: "Tests", count: assertionCount },
+          { value: "scripts", label: "Scripts", count: scriptCount },
+          { value: "flow", label: "Flow", count: flowCount },
         ].map((t) => (
           <TabsTrigger
             key={t.value}
@@ -401,6 +507,14 @@ export function RequestEditor() {
 
         <TabsContent value="tests" className="m-0 h-full">
           <AssertionEditor />
+        </TabsContent>
+
+        <TabsContent value="scripts" className="m-0 h-full">
+          <ScriptEditor />
+        </TabsContent>
+
+        <TabsContent value="flow" className="m-0 h-full">
+          <FlowEditor />
         </TabsContent>
       </div>
     </Tabs>
